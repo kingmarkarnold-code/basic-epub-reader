@@ -17,15 +17,25 @@ records them so the build can be checked against them.
 
 ## V1 — in scope
 
-### Bookshelf (the library screen — the Moon+ piece)
-- Books shown as **covers on a shelf-style grid**, title + author under each
-  cover, most recently read first.
+### Bookshelf (the library screen — the Moon+ piece, Joshua's description 2026-10-28)
+
+- It looks like **a real bookshelf**: front-facing books lined up on a
+  **wood-grain shelf**.
+- The **rows scroll** (up and down through the library).
+- **Rows adjust to the screen**: room for four or five books per row on a
+  wide screen, two or three on a smaller one — counted from the screen,
+  never fixed.
+- Covers are modest in size but always identifiable, two ways: the
+  book's **own cover** from inside the EPUB, or a cover the reader
+  **changes within the app**.
+- Mock: `mockups/shelf-v1.html` (+ rendered PNG) shows the first-open
+  screen — Joshua's real EPUBs on the shelf, 3 per row (his phone's
+  size), the third row cut off at the bottom edge because it scrolls.
 - Import: pick EPUB files from the phone's local storage or from Google
-  Drive (see "Files" below). The book's cover is extracted from the EPUB
-  itself.
+  Drive (see "Files" below).
 - Tap a cover → the book opens where you left off.
-- Long-press a cover → book details / remove from shelf (file itself is
-  never deleted).
+- Long-press a cover → book details / change cover / remove from shelf
+  (the file itself is never deleted).
 
 ### Reading screen
 - Page turning by tap zones (right/left edges) and swipe; a progress bar and
