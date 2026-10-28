@@ -1,4 +1,4 @@
-# Adamsville Reader — V1 Spec
+# Basic EPUB Reader — V1 Spec
 
 Written 2026-10-28 from Joshua's direction. His words govern; this document
 records them so the build can be checked against them.
