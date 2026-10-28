@@ -17,7 +17,7 @@
 <div id="shelfView">
   <div class="topbar">
     <div class="tb-title">Basic EPUB Reader</div>
-    <div class="tb-ver">Version 0.1.2</div>
+    <div class="tb-ver">Version 0.1.3</div>
   </div>
   <!-- Shelf tools (v0.1.2): folder import (Joshua, 2026-10-28 —
        pick ONE folder, every EPUB inside it is added), a re-scan
@@ -36,7 +36,7 @@
          or use <b>Add folder</b> to bring in a whole folder of books at once.</p>
     </div>
     <div class="shelf-foot">Long-press a book to remove it from the shelf.</div>
-    <div class="shelf-foot" id="verLine">Reader 0.1.2</div>
+    <div class="shelf-foot" id="verLine">Reader 0.1.3</div>
   </div>
   <button id="addBtn" title="Add a book">+</button>
   <input type="file" id="fileInput" accept=".epub,application/epub+zip" multiple hidden>
@@ -90,5 +90,9 @@
 <div id="toast" class="hidden"></div>
 
 <script src="app.js"></script>
+<!-- Sync client (v0.1.3): reading places travel through the Epub
+     folder file and, paired once, directly with the laptop —
+     SYNC-SPEC §5/§6. Also adds the shelf's Sync screen. -->
+<script src="sync-client.js"></script>
 </body>
 </html>
