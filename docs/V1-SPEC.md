@@ -20,8 +20,9 @@ records them so the build can be checked against them.
 ### Bookshelf (the library screen — the Moon+ piece)
 - Books shown as **covers on a shelf-style grid**, title + author under each
   cover, most recently read first.
-- Import: pick EPUB files from the phone (Downloads, Drive via the system
-  file picker). The book's cover is extracted from the EPUB itself.
+- Import: pick EPUB files from the phone's local storage or from Google
+  Drive (see "Files" below). The book's cover is extracted from the EPUB
+  itself.
 - Tap a cover → the book opens where you left off.
 - Long-press a cover → book details / remove from shelf (file itself is
   never deleted).
@@ -33,6 +34,23 @@ records them so the build can be checked against them.
   (Moon+ gestures Joshua already knows).
 - Table of contents drawer; in-book search; bookmarks.
 - Remembers the reading place per book, on the device, with no account.
+
+### Files — local and Google Drive (Joshua's decision, 2026-10-28)
+
+The reader works with **local files and Google Drive**, and Joshua has
+approved building a sign-in section if that is what it takes. Two depths:
+
+- **Phase 1 (v1) — no sign-in in our app.** Local files open through
+  Android's system file picker, which needs no all-files permission.
+  The same picker already lists Google Drive as a place (Drive is
+  installed on Joshua's phones), so Drive books open the same way.
+  The shelf remembers where each book came from.
+- **Phase 2 — the sign-in section.** A real in-app Drive connection:
+  sign in with Google inside the reader, browse a Drive folder as part
+  of the shelf, and keep reading place in Drive so both phones agree.
+  This needs Google's sign-in machinery (OAuth, Drive permission for
+  the app's own files) — approved by Joshua 2026-10-28; scheduled
+  after the reading basics work.
 
 ### Definition pop-ups
 - Books produced by Mollie carry EPUB 3 footnote definitions
@@ -49,6 +67,7 @@ records them so the build can be checked against them.
 ## V1 — out of scope (deliberately)
 
 - PDF (a separate beast; Moon+'s PDF depth is not a v1 goal).
-- OPDS / online catalogues, Dropbox or cloud sync, accounts.
+- OPDS / online catalogues, Dropbox sync. (Google Drive is in scope —
+  see Files above; the Phase 2 sign-in is the only account.)
 - Text-to-speech (the phone's own read-aloud and Play Books cover today).
 - Any store release. Distribution is a sideloaded APK, like the Suite.
