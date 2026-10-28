@@ -1,9 +1,9 @@
 {
-  "bundleVersion": 5,
+  "bundleVersion": 6,
   "files": {
     "app.js": {
       "path": "files/app.js",
-      "sha256": "55b4f0defaf1425a507575fa5584d5ccf48518041ee759573ac0a0f10d2e5b64"
+      "sha256": "238a8f9e6b815641758cdab7b0e59c231931f96ff73efd9f199f3b02835afdba"
     },
     "index.html": {
       "path": "files/index.html",
@@ -19,6 +19,6 @@
     }
   },
   "minShellVersion": 4,
-  "note": "Web bundle 5 - read-aloud repair: the voice no longer reads hidden page furniture or footnote blocks (a book's generated page-list once made it spell out raw 'fn-' labels at the front of a book), and a chapter's last page, whose edge falls inside the footnote block, now reads its story text instead of being skipped in silence. Tap-a-word definition pop-ups are unchanged.",
+  "note": "Web bundle 6 - read-aloud repair: defined terms are spoken in place again. Bundle 5's footnote skip also swallowed the marked terms themselves, so a sentence came out as 'Words marked in blue, like , carry their meaning' and 'The publishes a number'. The anchors that carry a term are story text and are read; the footnote definitions they point at stay tap-only, exactly as bundle 5 left them.",
   "publishedAt": "2026-10-28"
 }
