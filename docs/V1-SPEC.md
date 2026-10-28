@@ -74,10 +74,32 @@ approved building a sign-in section if that is what it takes. Two depths:
 - Our authored terms live in dictionary files generated from one master
   list (`docs/DICTIONARY.md`), so Joshua's definitions work in every book.
 
+### Read-aloud (text-to-speech)
+
+- V1 includes a **basic read-aloud**: a button on the reading screen that
+  speaks the book through the **phone's own text-to-speech engine**. No
+  voice is built into the app — the engine, and therefore the voice, is
+  the phone's choice.
+- Natural voices (finding, 2026-10-28): the truly natural-sounding
+  voices are **cloud voices** — they live on a server, not in a phone.
+  The practical route to a near-natural voice **offline** on Joshua's
+  TCL is a system TTS engine app that this reader (and every other app)
+  can then speak through: **SherpaTTS** (F-Droid, GPL) running **Piper**
+  voices via sherpa-onnx. A voice is downloaded **once** — about 63 MB
+  for a medium voice — and then works entirely offline.
+- Why Piper and not the higher-quality Kokoro voices: measured on
+  budget phone chips, Kokoro runs **slower than real time** — the phone
+  cannot keep up with its own speech — while Piper runs **far faster
+  than real time**. On Joshua's hardware, Piper is the voice that works.
+- So Joshua can judge the voice himself, Mollie rendered a Piper sample
+  (voice: en_US-lessac-medium) reading the sample book's first chapter.
+
 ## V1 — out of scope (deliberately)
 
 - PDF (a separate beast; Moon+'s PDF depth is not a v1 goal).
 - OPDS / online catalogues, Dropbox sync. (Google Drive is in scope —
   see Files above; the Phase 2 sign-in is the only account.)
-- Text-to-speech (the phone's own read-aloud and Play Books cover today).
+- Text-to-speech beyond the basic read-aloud above — no built-in or
+  cloud voices in v1; the natural voice comes from the phone's engine
+  choice (see "Read-aloud").
 - Any store release. Distribution is a sideloaded APK, like the Suite.
