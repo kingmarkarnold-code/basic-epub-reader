@@ -1,0 +1,20 @@
+{
+  "bundleVersion": 1,
+  "minShellVersion": 3,
+  "publishedAt": "2026-10-28",
+  "note": "Web bundle 1 \u2014 the web layer inside the v0.1.2 APK (stable base).",
+  "files": {
+    "index.html": {
+      "sha256": "ebbbabacdc5c1bc75a54e35e898ca2021a98e78212bd5410a4e589caa1ff7d43",
+      "path": "files/index.html"
+    },
+    "app.js": {
+      "sha256": "90ca9bb6e8ecbf6b2af2e189848b99f3d21b2654635fc15665969cb36c129c87",
+      "path": "files/app.js"
+    },
+    "style.css": {
+      "sha256": "e8ccf964a69d94b0aa4a4309ba9abb4ebbdfc4ea40f36942aac5863149473450",
+      "path": "files/style.css"
+    }
+  }
+}

@@ -80,7 +80,58 @@ function progressOf(rec){
   return { cfi: null, pct: 0 };
 }
 
+/* Every import path (single file, sample book, folder import)
+   dedupes by ONE content key: the SHA-256 of the book's bytes.
+   Same bytes = same book, however many times and however they
+   arrive — re-adding a folder can never duplicate the shelf.
+   Records carry the key; shelves from before v0.1.2 get theirs
+   computed (and stored) the first time a check needs it. */
+async function contentKey(arrayBuffer){
+  try {
+    if (window.crypto && crypto.subtle && crypto.subtle.digest) {
+      var digest = await crypto.subtle.digest('SHA-256', arrayBuffer);
+      var u8 = new Uint8Array(digest), hex = '';
+      for (var i = 0; i < u8.length; i++)
+        hex += (u8[i] < 16 ? '0' : '') + u8[i].toString(16);
+      return 'sha256:' + hex;
+    }
+  } catch (e) { /* fall through to the hash below */ }
+  /* Deterministic fallback (no WebCrypto): two FNV-1a passes over
+     the bytes, seeded differently, plus the length. */
+  var bytes = new Uint8Array(arrayBuffer);
+  function fnv(seed){
+    var h = seed >>> 0;
+    for (var i = 0; i < bytes.length; i++) {
+      h ^= bytes[i];
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return ('0000000' + h.toString(16)).slice(-8);
+  }
+  return 'fnv:' + bytes.length + ':' + fnv(0x811c9dc5) + fnv(0x01000193);
+}
+async function findByKey(key){
+  for (var i = 0; i < library.length; i++) {
+    var rec = library[i];
+    if (!rec.key) {
+      try {
+        rec.key = await contentKey(rec.data);
+        idbPut(rec);
+      } catch (e) { continue; }
+    }
+    if (rec.key === key) return rec;
+  }
+  return null;
+}
+
+/* Returns { status: 'added' | 'dupe', rec } — throws when the file
+   cannot be parsed as a book at all. */
 async function importBook(arrayBuffer, quiet){
+  var key = await contentKey(arrayBuffer);
+  var dupe = await findByKey(key);
+  if (dupe) {
+    if (!quiet) toast('Already on your shelf: ' + dupe.title);
+    return { status: 'dupe', rec: dupe };
+  }
   var book = ePub(arrayBuffer);
   await book.ready;
   var meta = {};
@@ -98,6 +149,7 @@ async function importBook(arrayBuffer, quiet){
   try { book.destroy(); } catch (e) {}
   var rec = {
     id: 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    key: key,
     title: title, creator: creator, cover: cover,
     palette: paletteFor(title),
     data: arrayBuffer, addedAt: Date.now(), lastRead: 0
@@ -105,7 +157,7 @@ async function importBook(arrayBuffer, quiet){
   await idbPut(rec);
   library.push(rec);
   if (!quiet) toast('Added: ' + title);
-  return rec;
+  return { status: 'added', rec: rec };
 }
 
 /* ---------------- shelf ---------------- */
@@ -646,6 +698,150 @@ $('fileInput').addEventListener('change', async function(ev){
   renderShelf();
 });
 
+/* ================= folder import (Joshua, 2026-10-28) ==========
+   "Add folder": pick ONE folder — this phone or Google Drive,
+   through the system picker — and every EPUB inside it, subfolders
+   included, is added. No picking books one by one. The shell walks
+   the folder and hands over one book at a time; this side acks each
+   receipt, dedupes by content key, and keeps the counts for the
+   plain summary at the end. Picked folders are remembered by the
+   shell, so "Refresh folders" can re-scan them for new books. */
+var fimp = null;
+function folderReset(kind, total){
+  fimp = { kind: kind, total: total || 0, received: 0, processed: 0,
+           added: 0, dupe: 0, bad: 0, ended: false, inaccessible: 0,
+           chain: Promise.resolve(), finished: false };
+}
+function folderProgress(){
+  if (!fimp) return;
+  var verb = fimp.kind === 'rescan' ? 'Checking folders' : 'Adding books';
+  $('importTitle').textContent = verb + '…';
+  $('importText').textContent = 'Adding ' + fimp.processed + ' of ' + fimp.total + '…';
+  $('importFill').style.width =
+    (fimp.total > 0 ? Math.round(fimp.processed * 100 / fimp.total) : 0) + '%';
+  $('importOk').classList.add('hidden');
+  $('importOverlay').classList.remove('hidden');
+}
+function folderMaybeFinish(){
+  if (!fimp || fimp.finished) return;
+  if (!fimp.ended || fimp.processed < fimp.received) return;
+  fimp.finished = true;
+  /* Failed = files the shell found but that never became books:
+     ones it could not read, plus ones that arrived unparseable. */
+  var failed = fimp.total - fimp.added - fimp.dupe;
+  var lines = [];
+  lines.push('Added ' + fimp.added + ' new book' + (fimp.added === 1 ? '' : 's') + '.');
+  if (fimp.dupe > 0)
+    lines.push(fimp.dupe + (fimp.dupe === 1 ? ' was' : ' were') + ' already on your shelf.');
+  if (failed > 0)
+    lines.push(failed + (failed === 1
+      ? " couldn't be read as a book, and was skipped."
+      : " couldn't be read as books, and were skipped."));
+  if (fimp.inaccessible > 0)
+    lines.push(fimp.inaccessible + (fimp.inaccessible === 1 ? ' folder' : ' folders') +
+               " couldn't be reached — its permission may be gone.");
+  if (fimp.total === 0 && fimp.kind === 'import')
+    lines.push('No EPUB books were found in that folder.');
+  if (fimp.total === 0 && fimp.kind === 'rescan' && fimp.inaccessible === 0)
+    lines.push('No new books in your folders.');
+  $('importTitle').textContent = fimp.kind === 'rescan' ? 'Folder check done' : 'Folder added';
+  $('importText').textContent = lines.join(' ');
+  $('importFill').style.width = '100%';
+  $('importOk').classList.remove('hidden');
+  renderShelf();
+}
+window.__folderScanStart = function(kind, total){
+  folderReset(kind, total);
+  folderProgress();
+};
+window.__folderBook = function(name, b64){
+  /* Ack receipt FIRST: the shell keeps only one book in flight,
+     and this side then processes its queue in order. */
+  try { if (window.ReaderBridge && ReaderBridge.folderBookAck) ReaderBridge.folderBookAck(); } catch (e) {}
+  if (!fimp) folderReset('import', 0);
+  fimp.received++;
+  fimp.chain = fimp.chain.then(async function(){
+    try {
+      var r = await importBook(b64ToArrayBuffer(b64), true);
+      if (r.status === 'added') fimp.added++; else fimp.dupe++;
+    } catch (e) {
+      fimp.bad++;
+    }
+    fimp.processed++;
+    if (!fimp.finished) folderProgress();
+    folderMaybeFinish();
+  });
+};
+window.__folderScanEnd = function(kind, inaccessible){
+  if (!fimp) folderReset(kind, 0);
+  fimp.ended = true;
+  fimp.inaccessible = inaccessible || 0;
+  folderMaybeFinish();
+};
+window.__folderBusy = function(){
+  toast('A folder is already being added — one at a time.');
+};
+window.__folderPickFailed = function(){
+  toast("Couldn't open the folder picker on this phone.");
+};
+$('importOk').addEventListener('click', function(){
+  $('importOverlay').classList.add('hidden');
+});
+$('addFolderBtn').addEventListener('click', function(){
+  if (window.ReaderBridge && ReaderBridge.pickFolder) {
+    try { ReaderBridge.pickFolder(); return; } catch (e) {}
+  }
+  toast('Adding a whole folder works in the app on your phone.');
+});
+$('refreshFoldersBtn').addEventListener('click', function(){
+  if (window.ReaderBridge && ReaderBridge.rescanFolders) {
+    var n = 0;
+    try { n = ReaderBridge.folderCount ? ReaderBridge.folderCount() : 0; } catch (e) {}
+    if (!n) { toast('No folders yet — add one with "Add folder" first.'); return; }
+    try { ReaderBridge.rescanFolders(); return; } catch (e) {}
+  }
+  toast('Refreshing folders works in the app on your phone.');
+});
+
+/* ================= update channel (v0.1.2) ======================
+   This APK is the stable base; web-layer fixes arrive as numbered
+   bundles from the reader's repo. The shell checks on launch (and
+   on the shelf's Check-for-updates button), verifies every file's
+   sha256, and applies a new bundle at the NEXT cold start — never
+   mid-session, never unverified. The version line on the shelf
+   says which bundle is running, so it can be reported. */
+function updateVerLine(){
+  var shell = '0.1.2', bundle = null;
+  try {
+    if (window.ReaderBridge) {
+      if (ReaderBridge.shellVersionName) shell = ReaderBridge.shellVersionName();
+      if (ReaderBridge.webBundleVersion) bundle = ReaderBridge.webBundleVersion();
+    }
+  } catch (e) {}
+  $('verLine').textContent = 'Reader ' + shell +
+    (bundle ? ' · web bundle ' + bundle : '');
+}
+window.__updateCheckResult = function(status, version){
+  if (status === 'current') {
+    toast('Your reader is up to date (web bundle ' + version + ').');
+  } else if (status === 'updated') {
+    toast('Update downloaded — web bundle ' + version +
+          ' will be ready next time you open the reader.', 4200);
+  } else if (status === 'needs-apk') {
+    toast('The next update needs a new app version — ask Mollie for the new file.', 4200);
+  } else {
+    toast("Couldn't check for updates — try again later.");
+  }
+  updateVerLine();
+};
+$('updateBtn').addEventListener('click', function(){
+  if (window.ReaderBridge && ReaderBridge.checkForUpdates) {
+    toast('Checking for updates…');
+    try { ReaderBridge.checkForUpdates(); return; } catch (e) {}
+  }
+  toast('Update checks work in the app on your phone.');
+});
+
 /* ---------------- boot ---------------- */
 (async function boot(){
   try {
@@ -662,4 +858,5 @@ $('fileInput').addEventListener('change', async function(ev){
     } catch (e) { /* starter book failed; the shelf simply starts empty */ }
   }
   renderShelf();
+  updateVerLine();
 })();

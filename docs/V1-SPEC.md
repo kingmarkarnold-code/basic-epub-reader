@@ -124,6 +124,70 @@ approved building a sign-in section if that is what it takes. Two depths:
   the app's own files) — approved by Joshua 2026-10-28; scheduled
   after the reading basics work.
 
+### Folder import (Joshua, 2026-10-28 12:00 — implemented v0.1.2)
+
+Joshua's words, organized: when he taps Add and chooses Google Drive
+(or local storage), he should be able to **select a folder** and have
+the reader **find every EPUB inside it** — instead of going through
+a list picking the books one by one.
+
+- An **Add folder** button sits on the shelf next to the + (which
+  still adds individual files). One pick of one folder brings in
+  **every EPUB in it, subfolders included**.
+- The pick goes through the **system picker**, so it covers local
+  storage and Google Drive exactly like the single-file pick —
+  Phase 1 rules: no sign-in inside the app.
+- While it works, the shelf shows progress ("Adding 3 of 12…");
+  at the end, a plain summary: how many were added, how many were
+  already on the shelf, how many couldn't be read as books (those
+  are skipped, never a hard failure).
+- Books are recognised by their **content**, not their names: every
+  import path dedupes by the SHA-256 of the book's bytes, so adding
+  the same folder twice adds nothing twice.
+- Picked folders are **remembered** (the system grants a lasting
+  read permission), and **Refresh folders** on the shelf re-scans
+  them all for books that arrived since — again adding only what's
+  new. A folder whose permission is gone is reported in the summary,
+  not silently ignored.
+- Shell note: the folder walk is a generic picker primitive in the
+  shell (pick a tree → its files' bytes arrive one at a time), so a
+  future import (a folder of dictionaries, say) reuses the same pipe.
+
+### The stable base + web update channel (v0.1.2)
+
+Joshua's framing: **v0.1.2 is the stable base** — the install he
+should not have to keep redoing. From here, fixes and features that
+live in the web layer (the shelf, the reader page, its scripts and
+styles) ship as **patches over the air**, the same manifest pattern
+the game ecosystem uses:
+
+- The repo carries the channel: `update/channel.json` names the
+  current **web bundle version**, the minimum shell version it
+  needs, and the **sha256 of every file** in the bundle; the files
+  themselves sit under `update/files/`. Bundle 1 — the web layer
+  inside the v0.1.2 APK — is published alongside the build.
+- The shell checks the channel **on launch**, and on demand from the
+  shelf's **Check for updates** button. A newer bundle downloads in
+  the background; **every file's sha256 is verified** against the
+  manifest before the bundle is allowed anywhere near the reader.
+- A verified bundle waits and **applies at the next cold start** —
+  never mid-session, so a book never changes under its reader.
+  Whatever goes wrong (no signal, a bad file, a mismatched hash),
+  the **last-good bundle keeps serving**; the APK's own bundled web
+  layer is the permanent fallback, so an update can never strand
+  him on a broken reader.
+- The shelf's footer line always says what is running — app version
+  and **web bundle number** — so he can report it ("web bundle 3")
+  and Mollie knows exactly which code he is looking at.
+- **The honest Android limit:** this channel patches the *web
+  layer* only. A change to the native shell itself (a new bridge
+  power, a new permission) still means a new APK and a one-tap
+  install confirm from Joshua — Android gives sideloaded apps no
+  fully silent way to replace their own APK, and this reader does
+  not pretend otherwise. That is why v0.1.2's shell was built broad
+  on purpose: file pick, folder tree, read-aloud, full screen, and
+  the update machinery are all already in the base.
+
 ### Definition pop-ups
 - Books produced by Mollie carry EPUB 3 footnote definitions
   (`epub:type="noteref"` → footnote asides). Tapping a defined term floats

@@ -17,15 +17,26 @@
 <div id="shelfView">
   <div class="topbar">
     <div class="tb-title">Basic EPUB Reader</div>
-    <div class="tb-ver">Version 0.1.1</div>
+    <div class="tb-ver">Version 0.1.2</div>
+  </div>
+  <!-- Shelf tools (v0.1.2): folder import (Joshua, 2026-10-28 —
+       pick ONE folder, every EPUB inside it is added), a re-scan
+       of remembered folders, and the update channel's manual check.
+       The + button still adds individual books. -->
+  <div class="shelf-tools">
+    <button id="addFolderBtn" class="toolbtn">Add folder</button>
+    <button id="refreshFoldersBtn" class="toolbtn">Refresh folders</button>
+    <button id="updateBtn" class="toolbtn">Check for updates</button>
   </div>
   <div id="shelfScroll">
     <div id="shelf"></div>
     <div id="shelfEmpty" class="hidden">
       <p>Your shelf is empty.</p>
-      <p>Tap <b>+</b> to add an EPUB — from this phone or from Google Drive.</p>
+      <p>Tap <b>+</b> to add an EPUB — from this phone or from Google Drive —
+         or use <b>Add folder</b> to bring in a whole folder of books at once.</p>
     </div>
     <div class="shelf-foot">Long-press a book to remove it from the shelf.</div>
+    <div class="shelf-foot" id="verLine">Reader 0.1.2</div>
   </div>
   <button id="addBtn" title="Add a book">+</button>
   <input type="file" id="fileInput" accept=".epub,application/epub+zip" multiple hidden>
@@ -66,6 +77,14 @@
 <div id="footnoteCard" class="hidden">
   <div id="footnoteText"></div>
   <div id="footnoteHint">Tap anywhere to close</div>
+</div>
+
+<!-- ================= FOLDER IMPORT PROGRESS ================== -->
+<div id="importOverlay" class="hidden">
+  <div id="importTitle">Adding books…</div>
+  <div id="importBar"><i id="importFill"></i></div>
+  <div id="importText"></div>
+  <button id="importOk" class="barbtn hidden">OK</button>
 </div>
 
 <div id="toast" class="hidden"></div>

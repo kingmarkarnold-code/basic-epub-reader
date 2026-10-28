@@ -1,0 +1,139 @@
+/* Basic EPUB Reader — shelf + reader styling.
+   The shelf is Joshua's spec (2026-10-28): front-facing books on a
+   wood-grain shelf, rows sized by the screen, modest covers that are
+   always identifiable. Colours throughout — never grayscale. */
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body {
+  font-family: Verdana, Geneva, sans-serif;
+  background: linear-gradient(180deg,#3b2312 0%,#2e1a0c 55%,#241407 100%);
+  color:#efe3cb; overflow:hidden;
+  -webkit-user-select:none; user-select:none;
+  -webkit-tap-highlight-color: transparent;
+}
+.hidden { display:none !important; }
+
+/* ---------- top bars ---------- */
+.topbar {
+  height:56px; display:flex; align-items:center; gap:10px; padding:0 14px;
+  background: linear-gradient(180deg,#4a2c15,#38200f);
+  border-bottom:3px solid #191004; box-shadow:0 3px 8px rgba(0,0,0,.55);
+}
+.tb-title { color:#f5cf87; font-size:19px; font-weight:bold; letter-spacing:.3px;
+  text-shadow:0 2px 3px rgba(0,0,0,.7); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tb-title.small { font-size:15px; }
+.tb-ver { color:#c8a165; font-size:11px; }
+.barbtn {
+  background:#5d3a1e; color:#f5e7c8; border:1px solid #8a5a33; border-radius:8px;
+  font-size:15px; padding:8px 12px; font-family:inherit;
+}
+.barbtn:active { background:#77502a; }
+
+/* ---------- shelf ---------- */
+#shelfView { position:fixed; inset:0; display:flex; flex-direction:column; }
+#shelfScroll { flex:1; overflow-y:auto; padding:14px 6px 90px; }
+.shelf-row { display:flex; justify-content:space-evenly; align-items:flex-end; padding:0 4px; }
+.shelf-plank {
+  height:22px; margin:2px 0 30px;
+  background:
+    repeating-linear-gradient(92deg, rgba(0,0,0,.14) 0 7px, rgba(255,255,255,.05) 7px 13px, rgba(0,0,0,.07) 13px 21px),
+    linear-gradient(180deg,#a06a35 0%,#8a5527 45%,#6f421e 100%);
+  border-top:4px solid #bd8146; border-bottom:8px solid #4a2b12;
+  box-shadow:0 12px 16px rgba(0,0,0,.6);
+}
+.book { width:106px; text-align:center; }
+.book .coverimg, .book .fakecover {
+  width:104px; height:152px; margin:0 auto; display:block; object-fit:cover;
+  border-radius:3px 6px 6px 3px;
+  box-shadow: inset 4px 0 6px rgba(255,255,255,.18), 6px 8px 10px rgba(0,0,0,.55);
+}
+.book .fakecover { padding:14px 9px 10px 13px; color:#fff; overflow:hidden; }
+.book .fakecover .ft { font-family:Georgia,serif; font-size:13px; font-weight:bold; line-height:1.3;
+  text-shadow:0 1px 3px rgba(0,0,0,.6); }
+.book .fakecover .fr { height:2px; background:rgba(255,255,255,.55); margin:8px 4px; }
+.book .fakecover .fs { font-size:9px; opacity:.92; line-height:1.35; }
+.book .prog { height:5px; border-radius:3px; background:rgba(255,255,255,.18); margin:7px 6px 0; overflow:hidden; }
+.book .prog i { display:block; height:100%; background:#f0b35e; }
+.book .pct { color:#f0b35e; font-size:10px; margin-top:3px; min-height:13px; }
+.book .caption { color:#efe3cb; font-size:11px; line-height:1.3; margin-top:3px;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+#shelfEmpty { text-align:center; padding:60px 30px; font-size:15px; line-height:1.7; color:#e8d9b8; }
+.shelf-foot { text-align:center; color:#a9854f; font-size:11px; padding:8px 0 2px; }
+#addBtn {
+  position:fixed; right:18px; bottom:20px; width:58px; height:58px; border-radius:50%;
+  background: radial-gradient(circle at 35% 30%, #ffc46b, #e09a35);
+  color:#3a2408; font-size:34px; border:none; line-height:1;
+  box-shadow:0 6px 14px rgba(0,0,0,.6); z-index:20;
+}
+
+/* ---------- shelf tools + version line (v0.1.2) ---------- */
+.shelf-tools { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
+.toolbtn {
+  background:#5d3a1e; color:#f5e7c8; border:1px solid #8a5a33; border-radius:8px;
+  font-size:13px; padding:8px 10px; font-family:inherit;
+}
+.toolbtn:active { background:#77502a; }
+#verLine { color:#c8a165; }
+
+/* ---------- folder import progress (v0.1.2) ---------- */
+#importOverlay {
+  position:fixed; left:14px; right:14px; top:28%; z-index:55;
+  background:#fffaf0; color:#2a2118; border:2px solid #b98a45; border-radius:12px;
+  padding:18px 16px 14px; box-shadow:0 10px 30px rgba(0,0,0,.65);
+  font-size:15px; line-height:1.5; text-align:center;
+}
+#importTitle { font-weight:bold; margin-bottom:10px; }
+#importBar { height:8px; border-radius:4px; background:rgba(0,0,0,.15); overflow:hidden; margin-bottom:10px; }
+#importFill { display:block; height:100%; width:0%; background:#c97b2d; transition:width .25s ease; }
+#importText { margin-bottom:6px; }
+#importOk { margin-top:8px; }
+
+/* ---------- reader ---------- */
+#readerView { position:fixed; inset:0; display:flex; flex-direction:column; background:#f7f1e3; }
+#viewerWrap { flex:1; position:relative; }
+#viewer { position:absolute; inset:0; }
+#viewer iframe { border:none; }
+.tapzone { position:absolute; top:0; bottom:0; width:22%; z-index:5; }
+#tapLeft { left:0; } #tapRight { right:0; }
+
+/* Reader chrome (v0.1.1, Joshua 2026-10-28): slim top strip only —
+   Back, progress bar + percentage, and the read-aloud Stop chip.
+   No footer anywhere. The title line shows ONLY in the title-on
+   variant (slim title above the progress bar); default is off.
+   Full screen hides even this strip: nothing but the page. */
+#readerChrome {
+  min-height:48px; display:flex; align-items:center; gap:10px; padding:6px 10px;
+  background: linear-gradient(180deg,#4a2c15,#38200f);
+  border-bottom:3px solid #191004; box-shadow:0 3px 8px rgba(0,0,0,.35);
+}
+#chromeMain { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; }
+#titleLine { display:none; margin-bottom:4px; }
+body.title-on #titleLine { display:block; }
+#readerTitle { color:#f5cf87; font-size:13px; font-weight:bold; line-height:1.25;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#chapterLabel { color:#c8a165; font-size:11px; line-height:1.25;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#progressRow { display:flex; align-items:center; gap:8px; }
+#progressBar { flex:1; height:6px; border-radius:3px; background:rgba(255,255,255,.18); overflow:hidden; }
+#progressFill { display:block; height:100%; width:0%; background:#f0b35e; transition:width .3s ease; }
+#progressPct { color:#f0d9a8; font-size:12px; min-width:38px; text-align:right; }
+#ttsStopBtn { white-space:nowrap; }
+body.fullscreen #readerChrome { display:none; }
+
+/* ---------- footnote pop-up ---------- */
+#footnoteCard {
+  position:fixed; left:14px; right:14px; bottom:16px; z-index:50;
+  background:#fffaf0; color:#2a2118; border:2px solid #b98a45; border-radius:12px;
+  padding:16px 16px 10px; box-shadow:0 10px 30px rgba(0,0,0,.65);
+  font-family:Georgia,serif; font-size:16px; line-height:1.5;
+  max-height:45%; overflow-y:auto;
+}
+#footnoteHint { margin-top:8px; font-family:Verdana,sans-serif; font-size:11px; color:#9a7c4c; text-align:right; }
+
+/* ---------- toast ---------- */
+#toast {
+  position:fixed; left:50%; bottom:96px; transform:translateX(-50%); z-index:60;
+  background:#1d1206; color:#f5e7c8; border:1px solid #b98a45; border-radius:10px;
+  padding:10px 16px; font-size:14px; box-shadow:0 6px 18px rgba(0,0,0,.6);
+  max-width:86%; text-align:center;
+}

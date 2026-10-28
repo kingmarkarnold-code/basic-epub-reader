@@ -66,6 +66,28 @@ body {
   box-shadow:0 6px 14px rgba(0,0,0,.6); z-index:20;
 }
 
+/* ---------- shelf tools + version line (v0.1.2) ---------- */
+.shelf-tools { display:flex; gap:8px; padding:10px 12px 0; flex-wrap:wrap; }
+.toolbtn {
+  background:#5d3a1e; color:#f5e7c8; border:1px solid #8a5a33; border-radius:8px;
+  font-size:13px; padding:8px 10px; font-family:inherit;
+}
+.toolbtn:active { background:#77502a; }
+#verLine { color:#c8a165; }
+
+/* ---------- folder import progress (v0.1.2) ---------- */
+#importOverlay {
+  position:fixed; left:14px; right:14px; top:28%; z-index:55;
+  background:#fffaf0; color:#2a2118; border:2px solid #b98a45; border-radius:12px;
+  padding:18px 16px 14px; box-shadow:0 10px 30px rgba(0,0,0,.65);
+  font-size:15px; line-height:1.5; text-align:center;
+}
+#importTitle { font-weight:bold; margin-bottom:10px; }
+#importBar { height:8px; border-radius:4px; background:rgba(0,0,0,.15); overflow:hidden; margin-bottom:10px; }
+#importFill { display:block; height:100%; width:0%; background:#c97b2d; transition:width .25s ease; }
+#importText { margin-bottom:6px; }
+#importOk { margin-top:8px; }
+
 /* ---------- reader ---------- */
 #readerView { position:fixed; inset:0; display:flex; flex-direction:column; background:#f7f1e3; }
 #viewerWrap { flex:1; position:relative; }
