@@ -1,4 +1,4 @@
-# Adamsville Reader
+# Basic EPUB Reader
 
 Joshua's own EPUB reader, started 2026-10-28.
 
