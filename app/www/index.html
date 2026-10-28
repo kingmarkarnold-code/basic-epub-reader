@@ -17,7 +17,7 @@
 <div id="shelfView">
   <div class="topbar">
     <div class="tb-title">Basic EPUB Reader</div>
-    <div class="tb-ver">Version 0.1.0</div>
+    <div class="tb-ver">Version 0.1.1</div>
   </div>
   <div id="shelfScroll">
     <div id="shelf"></div>
@@ -32,22 +32,33 @@
 </div>
 
 <!-- ============================ READER ============================ -->
+<!-- Joshua's gesture chrome (2026-10-28): NO footer, NO font-size
+     buttons (pinch replaces them), NO title header by default.
+     The slim chrome carries only what no gesture replaces: the
+     Back-to-shelf button, a progress bar + percentage, and a Stop
+     chip that appears only while read-aloud is speaking. The
+     title line exists only in the title-on variant (body.title-on:
+     slim title above the progress bar), pending Joshua's ruling.
+     In full screen even this chrome hides — the page is everything. -->
 <div id="readerView" class="hidden">
-  <div class="topbar reader-bar">
+  <div id="readerChrome">
     <button id="backBtn" class="barbtn">&#8592; Shelf</button>
-    <div id="readerTitle" class="tb-title small"></div>
-    <button id="fontDown" class="barbtn">A&#8722;</button>
-    <button id="fontUp" class="barbtn">A+</button>
+    <div id="chromeMain">
+      <div id="titleLine">
+        <div id="readerTitle"></div>
+        <div id="chapterLabel"></div>
+      </div>
+      <div id="progressRow">
+        <div id="progressBar"><i id="progressFill"></i></div>
+        <div id="progressPct">…</div>
+      </div>
+    </div>
+    <button id="ttsStopBtn" class="barbtn hidden">&#128266; Stop</button>
   </div>
   <div id="viewerWrap">
     <div id="viewer"></div>
     <div id="tapLeft" class="tapzone"></div>
     <div id="tapRight" class="tapzone"></div>
-  </div>
-  <div class="bottombar">
-    <button id="prevBtn" class="barbtn">&#9664; Prev</button>
-    <div id="locLabel">…</div>
-    <button id="nextBtn" class="barbtn">Next &#9654;</button>
   </div>
 </div>
 

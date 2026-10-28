@@ -173,6 +173,27 @@ window.addEventListener('resize', function(){
 /* ---------------- reader ---------------- */
 var cur = { id: null, book: null, rendition: null, fontPct: 110, saveT: null };
 
+/* Font size is a persisted preference now (v0.1.1): pinch sets it,
+   the A−/A+ buttons are gone. Range matches the old buttons' spirit
+   but wider, because a pinch can ask for more than a button could. */
+var FONT_MIN = 60, FONT_MAX = 240;
+function loadFontPct(){
+  var v = NaN;
+  try { v = parseInt(localStorage.getItem('ber-font-pct') || '', 10); } catch (e) {}
+  return isFinite(v) ? Math.max(FONT_MIN, Math.min(FONT_MAX, v)) : 110;
+}
+function saveFontPct(){
+  try { localStorage.setItem('ber-font-pct', String(cur.fontPct)); } catch (e) {}
+}
+
+/* Header variant (Joshua's ruling pending — see docs/V1-SPEC.md):
+   default 'off' = no title header, only the slim progress strip.
+   'on' = slim title above the progress bar. One stored preference
+   flips it; nothing else in the layout changes. */
+var TITLE_ON = false;
+try { TITLE_ON = localStorage.getItem('ber-title') === 'on'; } catch (e) {}
+document.body.classList.toggle('title-on', TITLE_ON);
+
 function setReaderOpen(open){
   document.body.classList.toggle('reading', open);
   if (window.ReaderBridge && ReaderBridge.setReaderOpen) {
@@ -189,7 +210,11 @@ async function openBook(id){
   $('shelfView').classList.add('hidden');
   $('readerView').classList.remove('hidden');
   $('readerTitle').textContent = rec.title;
-  $('locLabel').textContent = 'Opening…';
+  $('chapterLabel').textContent = '';
+  var startPct = Math.round((progressOf(rec).pct || 0) * 100);
+  $('progressFill').style.width = startPct + '%';
+  $('progressPct').textContent = startPct > 0 ? startPct + '%' : '…';
+  cur.fontPct = loadFontPct();
   setReaderOpen(true);
 
   var book = ePub(rec.data.slice(0));
@@ -200,8 +225,12 @@ async function openBook(id){
   });
   cur.rendition = rendition;
   rendition.themes.default({
+    /* user-select off: a long-press on the page means "read aloud"
+       (Joshua's gesture), never text selection. */
     'body': { 'font-family': 'Georgia, serif', 'line-height': '1.55',
-              'color': '#26221c', 'background': '#f7f1e3' },
+              'color': '#26221c', 'background': '#f7f1e3',
+              '-webkit-user-select': 'none', 'user-select': 'none',
+              '-webkit-touch-callout': 'none' },
     'p': { 'margin': '0 0 0.9em 0' }
   });
   rendition.themes.fontSize(cur.fontPct + '%');
@@ -231,6 +260,24 @@ async function openBook(id){
         });
       })(links[i]);
     }
+    /* Reading gestures live INSIDE the page: epub.js renders each
+       page in an iframe whose touches never reach the outer page,
+       so every section document gets its own gesture handlers.
+       No long-press menu, ever — a hold means read-aloud. */
+    doc.addEventListener('contextmenu', function(ev){ ev.preventDefault(); });
+    attachGestures(doc, {
+      onTap: function(el){
+        if (!$('footnoteCard').classList.contains('hidden')) {
+          $('footnoteCard').classList.add('hidden');   // first tap just dismisses
+          return;
+        }
+        var a = null;
+        try { a = el && el.closest ? el.closest('a') : null; } catch (e) {}
+        if (a) return;   // links/footnotes keep their own behaviour
+        setFullscreen(!isFullscreen);
+      },
+      onLongPress: function(){ toggleTTS(); }
+    });
   });
 
   rendition.on('relocated', function(loc){
@@ -245,9 +292,13 @@ async function openBook(id){
       var nav = book.navigation && book.navigation.get(loc.start.href);
       if (nav && nav.label) chapter = nav.label.trim();
     } catch (e) {}
-    $('locLabel').textContent =
-      (chapter ? chapter + ' · ' : '') +
-      (pct != null ? Math.round(pct * 100) + '%' : '…');
+    /* Slim progress strip: bar + percentage. Chapter shows only in
+       the title-on header variant. */
+    if (pct != null) {
+      $('progressFill').style.width = Math.round(pct * 100) + '%';
+      $('progressPct').textContent = Math.round(pct * 100) + '%';
+    }
+    $('chapterLabel').textContent = chapter;
     clearTimeout(cur.saveT);
     cur.saveT = setTimeout(function(){
       localStorage.setItem('ber-progress-' + cur.id,
@@ -260,6 +311,8 @@ async function openBook(id){
   book.locations.generate(1024).catch(function(){});
 }
 function closeBook(silent){
+  stopTTS();
+  if (isFullscreen) setFullscreen(false);
   if (cur.rendition) { try { cur.rendition.destroy(); } catch (e) {} cur.rendition = null; }
   if (cur.book) { try { cur.book.destroy(); } catch (e) {} cur.book = null; }
   cur.id = null;
@@ -282,19 +335,299 @@ $('footnoteCard').addEventListener('click', function(){
   $('footnoteCard').classList.add('hidden');
 });
 
+/* ================= reading gestures (Joshua, 2026-10-28) ==========
+   Single tap on the page ....... toggle full screen
+   Tap-and-hold ................. read aloud from here / stop
+   Pinch out / pinch in ......... bigger / smaller text (persisted)
+   Tap the left/right edges ..... previous / next page (unchanged)
+   The handlers attach to each book page's own document (see the
+   content hook in openBook) and to the two tap zones, because the
+   pages live in an epub.js iframe whose touches stay inside it. */
+var LONG_PRESS_MS = 600, TAP_MAX_MS = 400, MOVE_MAX_PX = 14;
+var gestureTurnAt = 0;   // lets the plain click fallback stay a fallback
+
+function attachGestures(target, handlers){
+  var press = null, pinch = null;
+  function armLong(st){
+    st.longTimer = setTimeout(function(){
+      st.longFired = true;
+      if (handlers.onLongPress) handlers.onLongPress();
+    }, LONG_PRESS_MS);
+  }
+  function disarm(st){ if (st && st.longTimer) { clearTimeout(st.longTimer); st.longTimer = null; } }
+  function movedAway(st, x, y){
+    return Math.abs(x - st.x) > MOVE_MAX_PX || Math.abs(y - st.y) > MOVE_MAX_PX;
+  }
+  function tdist(a, b){
+    var dx = a.clientX - b.clientX, dy = a.clientY - b.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  target.addEventListener('touchstart', function(ev){
+    if (ev.touches.length === 2) {
+      if (press) { press.cancelled = true; disarm(press); }
+      pinch = { d0: tdist(ev.touches[0], ev.touches[1]) || 1,
+                pct0: cur.fontPct, applied: false };
+    } else if (ev.touches.length === 1 && !pinch) {
+      var t = ev.touches[0];
+      press = { x: t.clientX, y: t.clientY, t0: Date.now(), targetEl: ev.target,
+                longFired: false, cancelled: false, longTimer: null };
+      armLong(press);
+    }
+  }, { passive: true });
+  target.addEventListener('touchmove', function(ev){
+    if (pinch && ev.touches.length === 2) {
+      if (ev.cancelable) ev.preventDefault();
+      var pct = Math.round(Math.max(FONT_MIN, Math.min(FONT_MAX,
+        pinch.pct0 * (tdist(ev.touches[0], ev.touches[1]) / pinch.d0))));
+      if (pct !== cur.fontPct) {
+        cur.fontPct = pct;
+        if (cur.rendition) cur.rendition.themes.fontSize(pct + '%');
+        pinch.applied = true;
+      }
+    } else if (press && ev.touches.length === 1 &&
+               movedAway(press, ev.touches[0].clientX, ev.touches[0].clientY)) {
+      press.cancelled = true; disarm(press);   // a drag is a swipe, not a tap/hold
+    }
+  }, { passive: false });
+  target.addEventListener('touchend', function(ev){
+    if (pinch) {
+      if (ev.touches.length < 2) { if (pinch.applied) saveFontPct(); pinch = null; }
+      if (press) { press.cancelled = true; disarm(press); press = null; }
+      return;
+    }
+    if (!press) return;
+    var st = press; press = null; disarm(st);
+    if (st.longFired) { if (ev.cancelable) ev.preventDefault(); return; }
+    if (st.cancelled || Date.now() - st.t0 > TAP_MAX_MS) return;
+    if (handlers.onTap) handlers.onTap(st.targetEl);
+  });
+  target.addEventListener('touchcancel', function(){
+    disarm(press); press = null; pinch = null;
+  });
+  /* Mouse equivalents, so the gestures can be exercised on a desktop. */
+  target.addEventListener('mousedown', function(ev){
+    if (ev.button !== 0) return;
+    press = { x: ev.clientX, y: ev.clientY, t0: Date.now(), targetEl: ev.target,
+              longFired: false, cancelled: false, longTimer: null };
+    armLong(press);
+  });
+  target.addEventListener('mousemove', function(ev){
+    if (press && movedAway(press, ev.clientX, ev.clientY)) {
+      press.cancelled = true; disarm(press);
+    }
+  });
+  target.addEventListener('mouseup', function(){
+    if (!press) return;
+    var st = press; press = null; disarm(st);
+    if (st.longFired || st.cancelled || Date.now() - st.t0 > TAP_MAX_MS) return;
+    if (handlers.onTap) handlers.onTap(st.targetEl);
+  });
+}
+
+/* ================= full screen ===================================
+   Tap toggles it. In full screen the phone gives the page EVERYTHING:
+   no chrome here (CSS hides the strip) and no system bars (the shell
+   goes immersive via ReaderBridge). Without the shell (desktop), the
+   browser's own fullscreen stands in. */
+var isFullscreen = false;
+function setFullscreen(on){
+  isFullscreen = !!on;
+  document.body.classList.toggle('fullscreen', isFullscreen);
+  if (window.ReaderBridge && ReaderBridge.setFullscreen) {
+    try { ReaderBridge.setFullscreen(isFullscreen); } catch (e) {}
+  } else {
+    try {
+      if (isFullscreen && document.documentElement.requestFullscreen &&
+          !document.fullscreenElement) document.documentElement.requestFullscreen();
+      if (!isFullscreen && document.exitFullscreen && document.fullscreenElement)
+        document.exitFullscreen();
+    } catch (e) {}
+  }
+}
+window.__exitFullscreen = function(){ if (isFullscreen) setFullscreen(false); };
+
+/* ================= read-aloud (text-to-speech) ===================
+   Long-press starts reading FROM THE CURRENT PAGE, through the
+   book to its end (section by section). The voice is the phone's
+   own TTS engine — the shell bridge speaks through Android
+   TextToSpeech, so whichever engine Joshua installed (SherpaTTS /
+   Piper) does the reading. Web Speech is the fallback where no
+   bridge exists. A second long-press, the Stop chip, or closing
+   the book stops it. The page display does not chase the voice in
+   v0.1.1; the voice reads from where you are, wherever you look. */
+var speech = { on: false, chunks: [], i: 0, uid: 0,
+               currentId: '', nextSections: [], useNative: false };
+function cleanText(s){ return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
+function chunkText(text){
+  var out = [], rest = cleanText(text);
+  while (rest.length > 850) {
+    var probe = rest.slice(0, 850);
+    var cut = Math.max(probe.lastIndexOf('. '), probe.lastIndexOf('! '),
+                       probe.lastIndexOf('? '), probe.lastIndexOf('; '));
+    if (cut < 250) cut = probe.lastIndexOf(' ');
+    if (cut < 250) cut = 850;
+    out.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1).trim();
+  }
+  if (rest) out.push(rest);
+  return out.filter(function(c){ return c.length > 0; });
+}
+function currentSectionIndex(){
+  try {
+    var loc = cur.rendition.currentLocation();
+    if (loc && loc.start) {
+      if (typeof loc.start.index === 'number') return loc.start.index;
+      if (loc.start.href) {
+        var item = cur.book.spine.get(loc.start.href);
+        if (item && typeof item.index === 'number') return item.index;
+      }
+    }
+  } catch (e) {}
+  return 0;
+}
+function sectionText(idx){
+  return new Promise(function(resolve){
+    var item = null;
+    try { item = cur.book.spine.items[idx]; } catch (e) {}
+    if (!item) { resolve(''); return; }
+    item.load(cur.book.load.bind(cur.book)).then(function(doc){
+      var t = '';
+      try {
+        var html = new XMLSerializer().serializeToString(doc.body || doc);
+        t = cleanText(html.replace(/<[^>]+>/g, ' '));
+      } catch (e) {}
+      try { item.unload(); } catch (e) {}
+      resolve(t);
+    }).catch(function(){ resolve(''); });
+  });
+}
+function textFromCurrentPage(){
+  return new Promise(function(resolve){
+    try {
+      var loc = cur.rendition.currentLocation();
+      var list = cur.rendition.getContents();
+      if (loc && loc.start && list && list.length) {
+        var contents = list[0], doc = contents.document;
+        var range = contents.range(loc.start.cfi);
+        if (range && doc && doc.body) {
+          var tail = doc.createRange();
+          tail.setStart(range.startContainer, range.startOffset);
+          tail.setEnd(doc.body, doc.body.childNodes.length);
+          var t = cleanText(tail.toString());
+          if (t) { resolve(t); return; }
+        }
+      }
+    } catch (e) {}
+    /* Fallback: read the current section from its start. */
+    sectionText(currentSectionIndex()).then(resolve);
+  });
+}
+function speakNext(){
+  if (!speech.on) return;
+  if (speech.i >= speech.chunks.length) {
+    if (speech.nextSections.length) {
+      var idx = speech.nextSections.shift();
+      sectionText(idx).then(function(t){
+        if (!speech.on) return;
+        speech.chunks = chunkText(t);
+        speech.i = 0;
+        speakNext();
+      });
+      return;
+    }
+    stopTTS();
+    toast('Finished reading');
+    return;
+  }
+  var id = 'ber' + (++speech.uid);
+  speech.currentId = id;
+  var text = speech.chunks[speech.i];
+  if (speech.useNative) {
+    try { ReaderBridge.speak(id, text); }
+    catch (e) { speech.useNative = false; speakNext(); }
+  } else if (window.speechSynthesis) {
+    var u = new SpeechSynthesisUtterance(text);
+    var advance = function(){
+      if (speech.on && speech.currentId === id) { speech.i++; speakNext(); }
+    };
+    u.onend = advance; u.onerror = advance;
+    try { window.speechSynthesis.speak(u); }
+    catch (e) { stopTTS(); toast('Read-aloud is not available on this phone.', 4000); }
+  } else {
+    stopTTS();
+    toast('Read-aloud is not available on this phone.', 4000);
+  }
+}
+window.__ttsOnDone = function(id){
+  if (!speech.on || id !== speech.currentId) return;
+  speech.i++;
+  speakNext();
+};
+window.__ttsOnError = window.__ttsOnDone;
+window.__ttsUnavailable = function(){
+  if (!speech.on) return;
+  if (speech.useNative && window.speechSynthesis) {
+    speech.useNative = false;    // engine refused: try Web Speech once
+    speakNext();
+  } else {
+    stopTTS();
+    toast('Read-aloud is not available on this phone.', 4000);
+  }
+};
+function startTTS(){
+  if (!cur.rendition || !cur.book) return;
+  speech.useNative = !!(window.ReaderBridge && ReaderBridge.speak);
+  speech.on = true;
+  speech.i = 0; speech.chunks = [];
+  speech.nextSections = [];
+  var items = [];
+  try { items = cur.book.spine.items || []; } catch (e) {}
+  for (var k = currentSectionIndex() + 1; k < items.length; k++)
+    speech.nextSections.push(k);
+  $('ttsStopBtn').classList.remove('hidden');
+  toast('Reading aloud — long-press again to stop');
+  textFromCurrentPage().then(function(t){
+    if (!speech.on) return;
+    speech.chunks = chunkText(t);
+    speech.i = 0;
+    speakNext();
+  });
+}
+function stopTTS(){
+  speech.on = false;
+  speech.chunks = []; speech.nextSections = [];
+  try { if (window.ReaderBridge && ReaderBridge.stopSpeaking) ReaderBridge.stopSpeaking(); } catch (e) {}
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+  $('ttsStopBtn').classList.add('hidden');
+}
+function toggleTTS(){ if (speech.on) { stopTTS(); toast('Reading stopped'); } else startTTS(); }
+$('ttsStopBtn').addEventListener('click', function(){ toggleTTS(); });
+
 /* reader controls */
 $('backBtn').addEventListener('click', function(){ closeBook(false); });
-$('prevBtn').addEventListener('click', function(){ if (cur.rendition) cur.rendition.prev(); });
-$('nextBtn').addEventListener('click', function(){ if (cur.rendition) cur.rendition.next(); });
-$('tapLeft').addEventListener('click', function(){ if (cur.rendition) cur.rendition.prev(); });
-$('tapRight').addEventListener('click', function(){ if (cur.rendition) cur.rendition.next(); });
-$('fontUp').addEventListener('click', function(){
-  cur.fontPct = Math.min(160, cur.fontPct + 10);
-  if (cur.rendition) cur.rendition.themes.fontSize(cur.fontPct + '%');
+function turnPage(dir){
+  if (!cur.rendition) return;
+  gestureTurnAt = Date.now();
+  if (dir < 0) cur.rendition.prev(); else cur.rendition.next();
+}
+attachGestures($('tapLeft'), {
+  onTap: function(){ turnPage(-1); },
+  onLongPress: function(){ toggleTTS(); }
 });
-$('fontDown').addEventListener('click', function(){
-  cur.fontPct = Math.max(80, cur.fontPct - 10);
-  if (cur.rendition) cur.rendition.themes.fontSize(cur.fontPct + '%');
+attachGestures($('tapRight'), {
+  onTap: function(){ turnPage(1); },
+  onLongPress: function(){ toggleTTS(); }
+});
+/* Click fallback for the tap zones (exotic input only): a real
+   gesture turn stamps gestureTurnAt, so the click that trails it
+   never turns the page twice. */
+$('tapLeft').addEventListener('click', function(){
+  if (Date.now() - gestureTurnAt < 600) return;
+  if (cur.rendition) cur.rendition.prev();
+});
+$('tapRight').addEventListener('click', function(){
+  if (Date.now() - gestureTurnAt < 600) return;
+  if (cur.rendition) cur.rendition.next();
 });
 
 /* add books */

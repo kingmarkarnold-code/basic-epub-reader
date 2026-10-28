@@ -38,12 +38,74 @@ records them so the build can be checked against them.
   (the file itself is never deleted).
 
 ### Reading screen
-- Page turning by tap zones (right/left edges) and swipe; a progress bar and
-  chapter name at the bottom.
-- Font size control, day / night / sepia themes, brightness by edge drag
+- Page turning by tap zones (right/left edges) and swipe.
+- **No footer** (removed 2026-10-28 — see "Reading gestures" below).
+  A slim progress indicator — bar plus percentage — is all that
+  remains of the old bars, and it lives at the top, where the other
+  chrome was.
+- Font size by **pinch** (the A−/A+ buttons are gone — see gestures).
+- Day / night / sepia themes, brightness by edge drag
   (Moon+ gestures Joshua already knows).
 - Table of contents drawer; in-book search; bookmarks.
 - Remembers the reading place per book, on the device, with no account.
+
+### Reading gestures (Joshua, 2026-10-28 11:51 — implemented v0.1.1)
+
+Joshua's words, organized. The reading screen runs on gestures now;
+chrome exists only where no gesture can replace it.
+
+- **Single tap on the page → full screen.** The app takes over the
+  entire phone screen: the page is everything — no header, no
+  footer, no progress bar, no system bars. **Tap again → back** to
+  the normal view.
+- **Tap-and-hold → read aloud from where you are.** The hold opens
+  the text-to-speech engine and reading begins at the current
+  reading position. A second hold (or the Stop chip that appears in
+  the normal view while speaking) stops it.
+- **Pinch → text size.** Pinch out makes the text bigger, pinch in
+  makes it smaller. This is why the font-size buttons at the top are
+  gone: "the buttons at the top are no longer necessary since we're
+  using the pinch in and the pinch out."
+- **Header/title:** the title header is **not needed**; what stays
+  is the progression — how far you have gotten in the book. Joshua's
+  alternative, if the title is kept at all: shrink it so it sits
+  **above the progression bar** — progression bar and header
+  together in one slim strip. **His tap on this choice was still
+  pending when v0.1.1 was built**, so v0.1.1 defaults to *no title,
+  progress only*, with the title-above-progress variant built in
+  behind one stored preference (`ber-title` = `on`) so his ruling
+  flips it without a rebuild of the layout.
+- **Footer:** none. There is no footer in any view.
+- What still has a button, because no gesture replaces it: **Back
+  to the shelf** (and the Android Back key, which leaves full
+  screen first, then closes the book to the shelf).
+
+Implementation notes (v0.1.1, for the record):
+
+- epub.js renders each page in an iframe whose touches never reach
+  the outer page, so the gesture handlers are attached inside every
+  page as it renders, and to the page-turn tap zones. A tap on a
+  footnote/link anchor is never a full-screen toggle — anchors keep
+  their own behaviour — and a first tap while a definition pop-up
+  is open only dismisses the pop-up.
+- Read-aloud speaks from the top of the current page (resolved from
+  the reading position's CFI; if that ever fails, from the current
+  chapter's start), then continues section by section to the end of
+  the book. The shell speaks through Android's TextToSpeech, i.e.
+  the phone's default engine — SherpaTTS/Piper if that is what is
+  installed and set as default. Where no shell bridge exists (the
+  web build on a desktop), Web Speech stands in; where neither
+  exists, the reader says so instead of failing silently.
+- Pinch range is 60%–240%, applied live and persisted as a
+  preference, like the reading place.
+- The displayed page does **not** chase the voice in v0.1.1: the
+  voice reads on from where you started it, wherever you look.
+- A long-press on the page suppresses text selection and the
+  system long-press menu — the hold means read-aloud, always.
+  Consequence: the "Dictionary doorway" below (long-press a word)
+  is **superseded on the reading page** and needs a different
+  trigger before it can ship; it is an open question for Joshua,
+  not silently dropped.
 
 ### Files — local and Google Drive (Joshua's decision, 2026-10-28)
 
@@ -71,15 +133,20 @@ approved building a sign-in section if that is what it takes. Two depths:
 - Long-press any word → the shell hands it to the installed dictionary app
   (GoldenDict / ColorDict), which floats the meaning; closing it returns to
   the exact reading spot.
+- **Superseded in part (2026-10-28):** Joshua's gesture spec gives the
+  reading-page long-press to read-aloud. The doorway needs a new
+  trigger (double-tap a word is the obvious candidate) — open
+  question, awaiting his word. See "Reading gestures".
 - Our authored terms live in dictionary files generated from one master
   list (`docs/DICTIONARY.md`), so Joshua's definitions work in every book.
 
 ### Read-aloud (text-to-speech)
 
-- V1 includes a **basic read-aloud**: a button on the reading screen that
-  speaks the book through the **phone's own text-to-speech engine**. No
-  voice is built into the app — the engine, and therefore the voice, is
-  the phone's choice.
+- V1 includes a **basic read-aloud**: it speaks the book through the
+  **phone's own text-to-speech engine**. No voice is built into the
+  app — the engine, and therefore the voice, is the phone's choice.
+  Started and stopped by **tap-and-hold** on the page since v0.1.1
+  (Joshua's gesture spec — there is no read-aloud button).
 - Natural voices (finding, 2026-10-28): the truly natural-sounding
   voices are **cloud voices** — they live on a server, not in a phone.
   The practical route to a near-natural voice **offline** on Joshua's

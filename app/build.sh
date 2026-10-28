@@ -19,8 +19,8 @@
 # ============================================================================
 set -e
 
-VERSION=0.1.0
-VERSION_CODE=1
+VERSION=0.1.1
+VERSION_CODE=2
 
 export JAVA_HOME=~/workspace/.jdk/jdk17
 export PATH=$JAVA_HOME/bin:$PATH
