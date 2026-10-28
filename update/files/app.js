@@ -666,6 +666,15 @@ function ttsSkippedEl(el){
   try {
     type = (el.getAttribute && (el.getAttribute('epub:type') || el.getAttribute('role'))) || '';
   } catch (e) {}
+  /* A noteref ANCHOR is not the note it points at: its text is a
+     defined term sitting inside its sentence ("Words marked in
+     blue, like Footnote pop-up, carry their meaning…" / "The USGS
+     publishes a number…"), so it is spoken as ordinary story
+     text. The note it targets — the footnote aside — stays
+     skipped: the ASIDE tag, footnote classes and aria-hidden
+     checks above all fire first, and the text walk keeps a whole
+     subtree skipped when any ancestor is skipped. */
+  if (tag === 'A' && type.indexOf('noteref') >= 0) return false;
   return type.indexOf('footnote') >= 0 || type.indexOf('note') >= 0;
 }
 function ttsBlockOf(node){
