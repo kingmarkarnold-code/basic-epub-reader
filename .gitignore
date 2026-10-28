@@ -3,3 +3,5 @@
 build/
 stage/
 *.keystore
+app/stage/
+app/www/sample-book.js
