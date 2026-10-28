@@ -221,6 +221,15 @@ var resizeT = null;
 window.addEventListener('resize', function(){
   clearTimeout(resizeT); resizeT = setTimeout(renderShelf, 200);
 });
+/* A resize — above all the full-screen transition — makes epub.js
+   re-paginate, which can put a fresh document under the reader's
+   finger. Once it settles, be sure that document has the page
+   gestures (attachToLiveContents is idempotent). */
+var fsResizeT = null;
+window.addEventListener('resize', function(){
+  clearTimeout(fsResizeT);
+  fsResizeT = setTimeout(attachToLiveContents, 450);
+});
 
 /* ---------------- reader ---------------- */
 var cur = { id: null, book: null, rendition: null, fontPct: 110, saveT: null };
@@ -288,48 +297,18 @@ async function openBook(id){
   rendition.themes.fontSize(cur.fontPct + '%');
 
   /* Footnote pop-ups: a tapped definition link floats its note
-     over the page instead of jumping to the end of the chapter. */
+     over the page instead of jumping to the definitions. The
+     interception lives in attachFootnotePopups (below). */
   rendition.hooks.content.register(function(contents){
     var doc = contents.document;
     if (!doc) return;
-    var links = doc.querySelectorAll('a');
-    for (var i = 0; i < links.length; i++) {
-      (function(a){
-        var type = a.getAttribute('epub:type') || a.getAttribute('role') || '';
-        var href = a.getAttribute('href') || '';
-        if (type.indexOf('noteref') < 0 && href.indexOf('#') < 0) return;
-        a.addEventListener('click', function(ev){
-          var frag = href.split('#')[1];
-          var target = frag && doc.getElementById(frag);
-          if (!target) return;
-          var tt = target.getAttribute('epub:type') || target.getAttribute('role') || '';
-          var isNote = tt.indexOf('footnote') >= 0 || tt.indexOf('note') >= 0 ||
-                       target.tagName === 'ASIDE';
-          if (!isNote) return;   // ordinary link: let the book navigate
-          ev.preventDefault(); ev.stopPropagation();
-          var text = (target.textContent || '').replace(/\s+/g, ' ').trim();
-          if (text) showFootnote(text);
-        });
-      })(links[i]);
-    }
+    attachFootnotePopups(doc);
     /* Reading gestures live INSIDE the page: epub.js renders each
        page in an iframe whose touches never reach the outer page,
        so every section document gets its own gesture handlers.
        No long-press menu, ever — a hold means read-aloud. */
     doc.addEventListener('contextmenu', function(ev){ ev.preventDefault(); });
-    attachGestures(doc, {
-      onTap: function(el){
-        if (!$('footnoteCard').classList.contains('hidden')) {
-          $('footnoteCard').classList.add('hidden');   // first tap just dismisses
-          return;
-        }
-        var a = null;
-        try { a = el && el.closest ? el.closest('a') : null; } catch (e) {}
-        if (a) return;   // links/footnotes keep their own behaviour
-        setFullscreen(!isFullscreen);
-      },
-      onLongPress: function(){ toggleTTS(); }
-    });
+    attachGestures(doc, pageGestureHandlers());
   });
 
   rendition.on('relocated', function(loc){
@@ -356,10 +335,13 @@ async function openBook(id){
       localStorage.setItem('ber-progress-' + cur.id,
         JSON.stringify({ cfi: loc.start.cfi, pct: pct || 0, ts: Date.now() }));
     }, 350);
+    attachToLiveContents();
   });
 
   var saved = progressOf(rec);
   await rendition.display(saved.cfi || undefined);
+  attachToLiveContents();
+  try { rendition.on('rendered', function(){ attachToLiveContents(); }); } catch (e) {}
   book.locations.generate(1024).catch(function(){});
 }
 function closeBook(silent){
@@ -397,12 +379,22 @@ $('footnoteCard').addEventListener('click', function(){
    pages live in an epub.js iframe whose touches stay inside it. */
 var LONG_PRESS_MS = 600, TAP_MAX_MS = 400, MOVE_MAX_PX = 14;
 var gestureTurnAt = 0;   // lets the plain click fallback stay a fallback
+var lastTapHandledAt = 0;   // stamped whenever a tap/hold/pinch completes,
+                            // so the click fallback below can tell a tap
+                            // it already served from one it never saw
 
 function attachGestures(target, handlers){
+  /* Idempotent: epub.js page documents are recycled as the book
+     re-paginates, and attachToLiveContents() re-asserts these
+     handlers on whichever document is live — never twice on the
+     same one. */
+  if (!target || target.__berGestures) return;
+  target.__berGestures = true;
   var press = null, pinch = null;
   function armLong(st){
     st.longTimer = setTimeout(function(){
       st.longFired = true;
+      lastTapHandledAt = Date.now();
       if (handlers.onLongPress) handlers.onLongPress();
     }, LONG_PRESS_MS);
   }
@@ -443,7 +435,11 @@ function attachGestures(target, handlers){
   }, { passive: false });
   target.addEventListener('touchend', function(ev){
     if (pinch) {
-      if (ev.touches.length < 2) { if (pinch.applied) saveFontPct(); pinch = null; }
+      if (ev.touches.length < 2) {
+        if (pinch.applied) saveFontPct();
+        pinch = null;
+        lastTapHandledAt = Date.now();
+      }
       if (press) { press.cancelled = true; disarm(press); press = null; }
       return;
     }
@@ -451,6 +447,7 @@ function attachGestures(target, handlers){
     var st = press; press = null; disarm(st);
     if (st.longFired) { if (ev.cancelable) ev.preventDefault(); return; }
     if (st.cancelled || Date.now() - st.t0 > TAP_MAX_MS) return;
+    lastTapHandledAt = Date.now();
     if (handlers.onTap) handlers.onTap(st.targetEl);
   });
   target.addEventListener('touchcancel', function(){
@@ -472,7 +469,17 @@ function attachGestures(target, handlers){
     if (!press) return;
     var st = press; press = null; disarm(st);
     if (st.longFired || st.cancelled || Date.now() - st.t0 > TAP_MAX_MS) return;
+    lastTapHandledAt = Date.now();
     if (handlers.onTap) handlers.onTap(st.targetEl);
+  });
+  /* Click fallback: a tap whose touch sequence was interrupted
+     mid-flight — the system reclaims touches when the bars show or
+     hide — can still land as a click. If the paths above already
+     served this tap they stamped lastTapHandledAt, and this stays
+     out of the way; if they never saw it, this is the tap. */
+  target.addEventListener('click', function(ev){
+    if (Date.now() - lastTapHandledAt < 700) return;
+    if (handlers.onTap) handlers.onTap(ev.target);
   });
 }
 
@@ -481,7 +488,96 @@ function attachGestures(target, handlers){
    no chrome here (CSS hides the strip) and no system bars (the shell
    goes immersive via ReaderBridge). Without the shell (desktop), the
    browser's own fullscreen stands in. */
+/* Footnote pop-up interception for one page document.
+   epub.js navigates in-book links through an onclick PROPERTY it
+   assigns to every anchor in the page (the link rewriter in
+   lib/epub.min.js: t.onclick = function(){ ... display(path +
+   hash) }). v0.1.2 hung its pop-up handler on the anchor itself
+   with addEventListener and called stopPropagation — which can
+   never stop another handler on the SAME element — so epub.js's
+   onclick fired right after the pop-up showed and the reader
+   still jumped to the definitions (Joshua's hands-on report,
+   2026-10-28: "the pop-up is still working fine ... but it's
+   definitely still going to the definitions page").
+   The fix intercepts in the CAPTURE phase on the document: the
+   click is stopped on its way down, before the anchor — and its
+   onclick — is ever reached, whatever order anything registered
+   in. Only definition notes are intercepted; an ordinary in-book
+   link is left completely alone and navigates exactly as before.
+   And a tap that just dismissed an open pop-up (the gesture layer
+   stamps lastFootnoteDismissAt) is swallowed as well: it only
+   dismisses — it does not open the note it happened to land on. */
+var lastFootnoteDismissAt = 0;
+function attachFootnotePopups(doc){
+  doc.addEventListener('click', function(ev){
+    var a = null;
+    try { a = ev.target && ev.target.closest ? ev.target.closest('a') : null; } catch (e) {}
+    if (!a) return;
+    var type = a.getAttribute('epub:type') || a.getAttribute('role') || '';
+    var href = a.getAttribute('href') || '';
+    if (type.indexOf('noteref') < 0 && href.indexOf('#') < 0) return;
+    var frag = href.split('#')[1];
+    var target = frag && doc.getElementById(frag);
+    if (!target) return;
+    var tt = target.getAttribute('epub:type') || target.getAttribute('role') || '';
+    var isNote = tt.indexOf('footnote') >= 0 || tt.indexOf('note') >= 0 ||
+                 target.tagName === 'ASIDE';
+    if (!isNote) return;   // ordinary link: let the book navigate
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (Date.now() - lastFootnoteDismissAt < 800) return;
+    var text = (target.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text) showFootnote(text);
+  }, true);
+}
+
 var isFullscreen = false;
+var lastFsToggleAt = 0;
+/* The gesture handlers for a book page, shared by every page
+   document (the content hook attaches them as pages render;
+   attachToLiveContents re-asserts them on the live document after
+   re-pagination). The toggle carries its own lock: one physical
+   tap may be seen by more than one trigger path (touchend, the
+   click fallback, a re-attached document) — it still toggles
+   exactly once. */
+function pageGestureHandlers(){
+  return {
+    onTap: function(el){
+      if (!$('footnoteCard').classList.contains('hidden')) {
+        $('footnoteCard').classList.add('hidden');   // first tap just dismisses
+        lastFootnoteDismissAt = Date.now();   // the click trailing this tap must not open a note either
+        return;
+      }
+      var a = null;
+      try { a = el && el.closest ? el.closest('a') : null; } catch (e) {}
+      if (a) return;   // links/footnotes keep their own behaviour
+      var now = Date.now();
+      if (now - lastFsToggleAt < 700) return;
+      lastFsToggleAt = now;
+      setFullscreen(!isFullscreen);
+    },
+    onLongPress: function(){ toggleTTS(); }
+  };
+}
+/* Make sure the CURRENT page document carries the gesture
+   handlers. epub.js creates and recycles the iframe documents the
+   pages live in (every section change, every re-pagination), and
+   entering/leaving full screen resizes the viewer and forces a
+   re-pagination — v0.1.2's tap-in-full-screen failure lived here:
+   nothing ever re-checked that the live document still had its
+   handlers after the transition. attachGestures is idempotent,
+   so calling this often is cheap insurance. */
+function attachToLiveContents(){
+  if (!cur.rendition || !cur.rendition.getContents) return;
+  try {
+    var list = cur.rendition.getContents() || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].document)
+        attachGestures(list[i].document, pageGestureHandlers());
+    }
+  } catch (e) {}
+}
+var fsSettleT = null;
 function setFullscreen(on){
   isFullscreen = !!on;
   document.body.classList.toggle('fullscreen', isFullscreen);
@@ -495,6 +591,19 @@ function setFullscreen(on){
         document.exitFullscreen();
     } catch (e) {}
   }
+  /* The transition itself resizes the WebView (bars + inset
+     padding) and epub.js re-paginates. When the dust settles,
+     re-assert the shell's state (a bars/insets race cannot be
+     allowed to undo the toggle) and re-assert the handlers on
+     whichever page document is live now — the NEXT tap must
+     toggle back just as reliably as this one did. */
+  clearTimeout(fsSettleT);
+  fsSettleT = setTimeout(function(){
+    if (window.ReaderBridge && ReaderBridge.setFullscreen) {
+      try { ReaderBridge.setFullscreen(isFullscreen); } catch (e) {}
+    }
+    attachToLiveContents();
+  }, 650);
 }
 window.__exitFullscreen = function(){ if (isFullscreen) setFullscreen(false); };
 
@@ -707,13 +816,22 @@ $('fileInput').addEventListener('change', async function(ev){
    plain summary at the end. Picked folders are remembered by the
    shell, so "Refresh folders" can re-scan them for new books. */
 var fimp = null;
-function folderReset(kind, total){
+/* Set for exactly one scan: the automatic folder check that runs
+   when the app opens (bundle 2 — Joshua, 2026-10-28: "every time I
+   reopen the reader it will automatically check that folder for
+   new files"). __folderScanStart consumes it; __folderBusy clears
+   it if the shell turns the start away. An auto scan is QUIET: no
+   progress overlay, no summary dialog — a single self-dismissing
+   toast, and only when new books actually arrived. The manual
+   Refresh keeps the full progress + summary behaviour. */
+var pendingScanQuiet = false;
+function folderReset(kind, total, quiet){
   fimp = { kind: kind, total: total || 0, received: 0, processed: 0,
            added: 0, dupe: 0, bad: 0, ended: false, inaccessible: 0,
-           chain: Promise.resolve(), finished: false };
+           chain: Promise.resolve(), finished: false, quiet: !!quiet };
 }
 function folderProgress(){
-  if (!fimp) return;
+  if (!fimp || fimp.quiet) return;
   var verb = fimp.kind === 'rescan' ? 'Checking folders' : 'Adding books';
   $('importTitle').textContent = verb + '…';
   $('importText').textContent = 'Adding ' + fimp.processed + ' of ' + fimp.total + '…';
@@ -726,6 +844,17 @@ function folderMaybeFinish(){
   if (!fimp || fimp.finished) return;
   if (!fimp.ended || fimp.processed < fimp.received) return;
   fimp.finished = true;
+  if (fimp.quiet) {
+    /* Auto-check: silence is the success state. Unreadable files
+       and unreachable folders are counted here and surfaced only
+       on a manual Refresh; new books get one gentle toast. */
+    if (fimp.added > 0) {
+      renderShelf();
+      toast(fimp.added + (fimp.added === 1 ? ' new book' : ' new books') +
+            ' added from your folder', 3600);
+    }
+    return;
+  }
   /* Failed = files the shell found but that never became books:
      ones it could not read, plus ones that arrived unparseable. */
   var failed = fimp.total - fimp.added - fimp.dupe;
@@ -751,7 +880,9 @@ function folderMaybeFinish(){
   renderShelf();
 }
 window.__folderScanStart = function(kind, total){
-  folderReset(kind, total);
+  var quiet = (kind === 'rescan' && pendingScanQuiet);
+  pendingScanQuiet = false;
+  folderReset(kind, total, quiet);
   folderProgress();
 };
 window.__folderBook = function(name, b64){
@@ -779,6 +910,11 @@ window.__folderScanEnd = function(kind, inaccessible){
   folderMaybeFinish();
 };
 window.__folderBusy = function(){
+  /* The shell refused to start a scan because one is running. If
+     the refused start was the automatic open-check, stay silent —
+     and clear the flag, so the next manual scan is never mistaken
+     for an automatic one. */
+  if (pendingScanQuiet) { pendingScanQuiet = false; return; }
   toast('A folder is already being added — one at a time.');
 };
 window.__folderPickFailed = function(){
@@ -794,6 +930,7 @@ $('addFolderBtn').addEventListener('click', function(){
   toast('Adding a whole folder works in the app on your phone.');
 });
 $('refreshFoldersBtn').addEventListener('click', function(){
+  pendingScanQuiet = false;   // a manual refresh is never the quiet auto-check
   if (window.ReaderBridge && ReaderBridge.rescanFolders) {
     var n = 0;
     try { n = ReaderBridge.folderCount ? ReaderBridge.folderCount() : 0; } catch (e) {}
@@ -842,6 +979,29 @@ $('updateBtn').addEventListener('click', function(){
   toast('Update checks work in the app on your phone.');
 });
 
+/* ---------------- automatic folder check on open ----------------
+   Joshua (2026-10-28, bundle 2): reopening the reader checks his
+   remembered folder(s) for new EPUBs BY ITSELF — the manual
+   Refresh stays for asking out loud, but he should never have to.
+   Once per cold start, after the shelf has painted (never blocking
+   first paint), through the same bridge pipe the Refresh uses;
+   the scan runs quiet (see pendingScanQuiet above). Guards: the
+   run-once flag, no folders remembered = nothing to do, and a scan
+   already in progress is never re-entered. */
+var autoFolderCheckDone = false;
+function maybeAutoFolderCheck(){
+  if (autoFolderCheckDone) return;
+  autoFolderCheckDone = true;
+  if (!(window.ReaderBridge && ReaderBridge.rescanFolders)) return;
+  var n = 0;
+  try { n = ReaderBridge.folderCount ? ReaderBridge.folderCount() : 0; } catch (e) {}
+  if (!n) return;
+  if (fimp && !fimp.finished) return;
+  pendingScanQuiet = true;
+  try { ReaderBridge.rescanFolders(); }
+  catch (e) { pendingScanQuiet = false; }
+}
+
 /* ---------------- boot ---------------- */
 (async function boot(){
   try {
@@ -859,4 +1019,5 @@ $('updateBtn').addEventListener('click', function(){
   }
   renderShelf();
   updateVerLine();
+  setTimeout(maybeAutoFolderCheck, 900);
 })();

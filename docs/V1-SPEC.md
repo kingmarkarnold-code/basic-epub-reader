@@ -88,6 +88,19 @@ Implementation notes (v0.1.1, for the record):
   footnote/link anchor is never a full-screen toggle — anchors keep
   their own behaviour — and a first tap while a definition pop-up
   is open only dismisses the pop-up.
+- **Full-screen toggle, hardened (web bundle 2):** v0.1.2's tap
+  entered full screen, but tapping never left it — Joshua escaped
+  with the Android edge-swipe Back gesture. The toggle lived only
+  on epub.js's per-section page documents, and nothing re-checked
+  it after the full-screen transition resized the viewer and
+  epub.js re-paginated: the live document could be one carrying no
+  handlers. Bundle 2 makes the attachment idempotent and re-asserts
+  it on the live document at every lifecycle point (contents hook,
+  relocation, render, resize settle, full-screen settle), adds a
+  click fallback for taps whose touch sequence is interrupted
+  mid-flight, and locks the toggle so one tap toggles exactly once
+  however many paths saw it. The state machine now cycles
+  normal → full → normal → full by tap alone.
 - Read-aloud speaks from the top of the current page (resolved from
   the reading position's CFI; if that ever fails, from the current
   chapter's start), then continues section by section to the end of
@@ -149,6 +162,20 @@ a list picking the books one by one.
   them all for books that arrived since — again adding only what's
   new. A folder whose permission is gone is reported in the summary,
   not silently ignored.
+- **Automatic check on open (Joshua, 2026-10-28 12:31 — web
+  bundle 2):** reopening the reader re-scans the remembered
+  folder(s) BY ITSELF — no Refresh tap. The check runs once per
+  cold start, after the shelf has painted (it never blocks the
+  shelf from appearing), and it is **quiet**: no progress overlay,
+  no summary dialog; unreadable files and unreachable folders pass
+  silently (a manual Refresh still reports all of them in full).
+  When new books did arrive, one gentle toast says so — "3 new
+  books added from your folder" — and dismisses itself. His setup
+  behind it: the Drive folder named **"Epub"** is where his books
+  live (the Drive root cannot be granted as a folder — a Drive
+  provider behaviour — so he created the subfolder and stocked it
+  by hand once). From then on, putting a new EPUB in that folder
+  is all he should ever have to do.
 - Shell note: the folder walk is a generic picker primitive in the
   shell (pick a tree → its files' bytes arrive one at a time), so a
   future import (a folder of dictionaries, say) reuses the same pipe.
@@ -188,10 +215,57 @@ the game ecosystem uses:
   on purpose: file pick, folder tree, read-aloud, full screen, and
   the update machinery are all already in the base.
 
+### Read-aloud that turns its own pages (Joshua, 2026-10-28 12:33 — spec for web bundle 3, STAGED, not yet built)
+
+Joshua's words, organized: read-aloud must **turn the page itself** —
+when the voice finishes a page, the reader moves to the next page
+and keeps reading — and the **text being read is highlighted** as it
+reads. This supersedes the v0.1.1 note under "Reading gestures"
+("the displayed page does not chase the voice"): now the page DOES
+follow the voice, and the saved reading place follows it too —
+stopping leaves him where the voice stopped.
+
+- Speech is driven in **sentence-sized utterances** from the web
+  layer, each mapped to a known CFI range on the current page; when
+  a sentence starts, its range is **highlighted** (epub.js
+  annotations, a colour that stays readable in day, night, and
+  sepia).
+- On page exhaustion the reader turns (`rendition.next()`) and
+  continues with the next page's sentences, to the end of the book.
+- Stopping — a second long-press, the Stop chip, or leaving the
+  book — clears the highlight and halts speech and page-turning
+  together.
+- **Granularity, honestly:** sentence-level highlighting is the
+  floor the current shell guarantees — it already forwards
+  utterance done/error to the web layer per utterance
+  (`__ttsOnDone` / `__ttsOnError`), so one utterance per sentence
+  gives the web layer every boundary it needs. **Word-level**
+  highlighting needs the engine's character-range callbacks
+  (`UtteranceProgressListener.onRangeStart`), which the v0.1.2
+  shell does **not** forward — its listener implements onStart,
+  onDone, and onError only (MainActivity.java). Word-level
+  therefore waits for a small shell increment (reader v0.1.3);
+  bundle 3 ships sentence-level and never promises word-level the
+  engine cannot supply.
+
 ### Definition pop-ups
 - Books produced by Mollie carry EPUB 3 footnote definitions
   (`epub:type="noteref"` → footnote asides). Tapping a defined term floats
   the definition over the page; tap anywhere else to dismiss. No page jump.
+- **No page jump, enforced (web bundle 2):** v0.1.2 showed the
+  pop-up AND still navigated to the definitions — Joshua: "the
+  pop-up is still working fine ... but it's definitely still going
+  to the definitions page." Root cause: epub.js navigates in-book
+  links through an `onclick` **property** it assigns to every
+  anchor, and the old pop-up handler's `stopPropagation` cannot
+  stop a handler on the same element, so the navigation fired
+  right behind the pop-up. The bundle-2 interception sits in a
+  **capture-phase listener on the page document**: a definition
+  note's click is stopped on its way down, before the anchor is
+  ever reached. Ordinary in-book links (chapter cross-references
+  that are not definition notes) are untouched and navigate
+  exactly as before, and a tap that dismisses an open pop-up
+  never opens the note it happens to land on.
 
 ### Dictionary doorway (ordinary words)
 - Long-press any word → the shell hands it to the installed dictionary app
