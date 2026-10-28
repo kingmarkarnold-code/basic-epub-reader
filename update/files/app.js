@@ -1155,7 +1155,7 @@ $('refreshFoldersBtn').addEventListener('click', function(){
    mid-session, never unverified. The version line on the shelf
    says which bundle is running, so it can be reported. */
 function updateVerLine(){
-  var shell = '0.1.2', bundle = null;
+  var shell = '0.1.3', bundle = null;
   try {
     if (window.ReaderBridge) {
       if (ReaderBridge.shellVersionName) shell = ReaderBridge.shellVersionName();
