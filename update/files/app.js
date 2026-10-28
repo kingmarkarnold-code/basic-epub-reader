@@ -608,108 +608,231 @@ function setFullscreen(on){
 window.__exitFullscreen = function(){ if (isFullscreen) setFullscreen(false); };
 
 /* ================= read-aloud (text-to-speech) ===================
-   Long-press starts reading FROM THE CURRENT PAGE, through the
-   book to its end (section by section). The voice is the phone's
-   own TTS engine — the shell bridge speaks through Android
-   TextToSpeech, so whichever engine Joshua installed (SherpaTTS /
-   Piper) does the reading. Web Speech is the fallback where no
-   bridge exists. A second long-press, the Stop chip, or closing
-   the book stops it. The page display does not chase the voice in
-   v0.1.1; the voice reads from where you are, wherever you look. */
-var speech = { on: false, chunks: [], i: 0, uid: 0,
-               currentId: '', nextSections: [], useNative: false };
+   Long-press starts reading FROM THE TOP OF THE CURRENT PAGE,
+   and the reading runs to the end of the book. The voice is the
+   phone's own TTS engine — the shell bridge speaks through
+   Android TextToSpeech, so whichever engine Joshua installed
+   (SherpaTTS / Piper) does the reading. Web Speech is the
+   fallback where no bridge exists. A second long-press, the Stop
+   chip, or closing the book stops it.
+
+   Bundle 3 (Joshua, 2026-10-28 12:33, confirmed 12:40): the page
+   CHASES the voice, and the sentence being read is HIGHLIGHTED.
+   Speech is fed one sentence at a time; every sentence is mapped
+   to a CFI range on the page in view, its range lights up when
+   its utterance starts (an epub.js annotation), and when a
+   page's sentences run out the reader turns the page itself and
+   reads on. The grain is sentences because the shell forwards
+   exactly one boundary event per utterance (__ttsOnDone /
+   __ttsOnError): one utterance, one boundary, one highlight step.
+   Word-level highlighting would need the engine's
+   character-range callbacks (onRangeStart), which the v0.1.2
+   shell never forwards — that waits for shell v0.1.3, and this
+   bundle does not promise it.
+   The saved reading place follows the voice for free: the page
+   turns fire the rendition's relocated event, and the handler in
+   openBook already persists the place — stopping leaves him
+   standing on the page the voice reached. */
+var speech = { on: false, uid: 0, currentId: '', useNative: false,
+               sentences: [], si: 0, hlCfi: null, runId: 0,
+               turning: false, emptyTurns: 0, u: null };
 function cleanText(s){ return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
-function chunkText(text){
-  var out = [], rest = cleanText(text);
-  while (rest.length > 850) {
-    var probe = rest.slice(0, 850);
-    var cut = Math.max(probe.lastIndexOf('. '), probe.lastIndexOf('! '),
-                       probe.lastIndexOf('? '), probe.lastIndexOf('; '));
-    if (cut < 250) cut = probe.lastIndexOf(' ');
-    if (cut < 250) cut = 850;
-    out.push(rest.slice(0, cut + 1).trim());
-    rest = rest.slice(cut + 1).trim();
-  }
-  if (rest) out.push(rest);
-  return out.filter(function(c){ return c.length > 0; });
-}
-function currentSectionIndex(){
+
+/* ---- the page in view, as sentences with CFI ranges ---------- */
+var TTS_BLOCK_TAGS = { P:1, H1:1, H2:1, H3:1, H4:1, H5:1, H6:1, LI:1,
+  BLOCKQUOTE:1, TD:1, TH:1, DIV:1, SECTION:1, ARTICLE:1, DT:1, DD:1,
+  FIGCAPTION:1, CAPTION:1, PRE:1, ADDRESS:1 };
+function ttsSkippedEl(el){
+  /* Never read aloud: scripts/styles, and footnote asides (the
+     sample book's definitions live in asides — they are pop-up
+     material, not story text). */
+  var tag = el.tagName || '';
+  if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'ASIDE')
+    return true;
+  var type = '';
   try {
-    var loc = cur.rendition.currentLocation();
-    if (loc && loc.start) {
-      if (typeof loc.start.index === 'number') return loc.start.index;
-      if (loc.start.href) {
-        var item = cur.book.spine.get(loc.start.href);
-        if (item && typeof item.index === 'number') return item.index;
-      }
-    }
+    type = (el.getAttribute && (el.getAttribute('epub:type') || el.getAttribute('role'))) || '';
   } catch (e) {}
-  return 0;
+  return type.indexOf('footnote') >= 0 || type.indexOf('note') >= 0;
 }
-function sectionText(idx){
-  return new Promise(function(resolve){
-    var item = null;
-    try { item = cur.book.spine.items[idx]; } catch (e) {}
-    if (!item) { resolve(''); return; }
-    item.load(cur.book.load.bind(cur.book)).then(function(doc){
-      var t = '';
-      try {
-        var html = new XMLSerializer().serializeToString(doc.body || doc);
-        t = cleanText(html.replace(/<[^>]+>/g, ' '));
-      } catch (e) {}
-      try { item.unload(); } catch (e) {}
-      resolve(t);
-    }).catch(function(){ resolve(''); });
-  });
-}
-function textFromCurrentPage(){
-  return new Promise(function(resolve){
-    try {
-      var loc = cur.rendition.currentLocation();
-      var list = cur.rendition.getContents();
-      if (loc && loc.start && list && list.length) {
-        var contents = list[0], doc = contents.document;
-        var range = contents.range(loc.start.cfi);
-        if (range && doc && doc.body) {
-          var tail = doc.createRange();
-          tail.setStart(range.startContainer, range.startOffset);
-          tail.setEnd(doc.body, doc.body.childNodes.length);
-          var t = cleanText(tail.toString());
-          if (t) { resolve(t); return; }
-        }
-      }
-    } catch (e) {}
-    /* Fallback: read the current section from its start. */
-    sectionText(currentSectionIndex()).then(resolve);
-  });
-}
-function speakNext(){
-  if (!speech.on) return;
-  if (speech.i >= speech.chunks.length) {
-    if (speech.nextSections.length) {
-      var idx = speech.nextSections.shift();
-      sectionText(idx).then(function(t){
-        if (!speech.on) return;
-        speech.chunks = chunkText(t);
-        speech.i = 0;
-        speakNext();
-      });
-      return;
-    }
-    stopTTS();
-    toast('Finished reading');
-    return;
+function ttsBlockOf(node){
+  var n = node.parentNode;
+  while (n && n.nodeType === 1) {
+    if (TTS_BLOCK_TAGS[n.tagName]) return n;
+    n = n.parentNode;
   }
+  return null;
+}
+/* Collect the visible page's text as a stream of node slices:
+   every text node inside the page range, clipped at the range's
+   ends, in reading order — plus the char positions where the
+   block element changes (a paragraph break ends a sentence even
+   without terminal punctuation: headings, list items). */
+function pageTextStream(contents, startR, endR){
+  var doc = contents.document;
+  if (!doc || !doc.body) return null;
+  var nodes = [];
+  (function rec(n, skipped){
+    if (n.nodeType === 3) { if (!skipped) nodes.push(n); return; }
+    if (n.nodeType !== 1) return;
+    var sk = skipped || ttsSkippedEl(n);
+    var kids = n.childNodes || [];
+    for (var i = 0; i < kids.length; i++) rec(kids[i], sk);
+  })(doc.body, false);
+  var si = nodes.indexOf(startR.startContainer);
+  var ei = nodes.indexOf(endR.endContainer);
+  if (si < 0 || ei < 0 || ei < si) return null;
+  var segs = [], full = '', breaks = [], prevBlock;
+  for (var i = si; i <= ei; i++) {
+    var node = nodes[i];
+    var data = node.data != null ? String(node.data) : String(node.textContent || '');
+    var from = (i === si) ? startR.startOffset : 0;
+    var to = (i === ei) ? endR.endOffset : data.length;
+    if (to <= from) continue;
+    var block = ttsBlockOf(node);
+    if (prevBlock !== undefined && block !== prevBlock && full.length > 0)
+      breaks.push(full.length);
+    prevBlock = block;
+    segs.push({ node: node, off: from, text: data.slice(from, to), g: full.length });
+    full += data.slice(from, to);
+  }
+  return { segs: segs, full: full, breaks: breaks, doc: doc };
+}
+var TTS_ABBREV = { mr:1, mrs:1, ms:1, dr:1, st:1, jr:1, sr:1, prof:1,
+                   vs:1, etc:1, fig:1, vol:1 };
+/* Sentence spans [s, e) over the page's text stream. A sentence
+   ends after . ! ? … (plus any closing quotes/brackets) when what
+   follows — past the whitespace — looks like a new sentence (a
+   capital, a digit, an opening quote) or is the stream's end;
+   a dot closing a known abbreviation or a single initial does
+   not end one, and a dot with no space after it (3.5, e.g.'s
+   inner dot) never does. Block changes force a cut. Spans are
+   trimmed and must contain a letter or a digit to be spoken. */
+function ttsSentenceSpans(full, breaks){
+  var cuts = {}, i;
+  cuts[0] = 1; cuts[full.length] = 1;
+  (breaks || []).forEach(function(b){ if (b > 0 && b < full.length) cuts[b] = 1; });
+  for (i = 0; i < full.length; i++) {
+    var ch = full[i];
+    if (ch !== '.' && ch !== '!' && ch !== '?' && ch !== '…') continue;
+    var j = i + 1;
+    while (j < full.length && '.!?…'.indexOf(full[j]) >= 0) j++;
+    while (j < full.length && '"\'”’)]'.indexOf(full[j]) >= 0) j++;
+    if (j < full.length && !/\s/.test(full[j])) continue;
+    if (ch === '.') {
+      var w = i;
+      while (w > 0 && /[A-Za-z.]/.test(full[w - 1])) w--;
+      /* The token the dot closes is the last dot-separated piece
+         of the run before it — in "four.Dr." the run is "four.Dr"
+         (the previous sentence's dot is part of the run), and the
+         token is "Dr". In "U.S.A." it is "A": a single initial. */
+      var word = full.slice(w, i).split('.').pop().toLowerCase();
+      if (TTS_ABBREV[word] || word.length <= 1) continue;
+    }
+    var k = j;
+    while (k < full.length && /\s/.test(full[k])) k++;
+    if (k < full.length && !/[A-Z0-9"“'‘(]/.test(full[k])) continue;
+    cuts[j] = 1;
+  }
+  var pts = Object.keys(cuts).map(Number).sort(function(a, b){ return a - b; });
+  var spans = [];
+  for (i = 0; i + 1 < pts.length; i++) {
+    var s = pts[i], e = pts[i + 1];
+    while (s < e && /\s/.test(full[s])) s++;
+    while (e > s && /\s/.test(full[e - 1])) e--;
+    if (e > s && /[A-Za-z0-9]/.test(full.slice(s, e))) spans.push({ s: s, e: e });
+  }
+  return spans;
+}
+function ttsStreamPoint(segs, pos, isEnd){
+  for (var i = 0; i < segs.length; i++) {
+    var sg = segs[i];
+    if (pos < sg.g || pos > sg.g + sg.text.length) continue;
+    if (pos === sg.g + sg.text.length && !isEnd && i + 1 < segs.length) continue;
+    return { node: sg.node, off: sg.off + (pos - sg.g) };
+  }
+  var last = segs[segs.length - 1];
+  return { node: last.node, off: last.off + last.text.length };
+}
+/* The sentences of the page currently in view, top to bottom,
+   each with its CFI range for the highlight. null = the page's
+   innards cannot be reached yet (the caller retries); [] = the
+   page genuinely has nothing to say (a picture page, a blank). */
+function buildPageSentences(){
+  if (!cur.rendition || !cur.rendition.getContents) return null;
+  var loc = null, list = null;
+  try { loc = cur.rendition.currentLocation(); list = cur.rendition.getContents(); } catch (e) {}
+  if (!loc || !loc.start || !loc.end || !list || !list.length) return null;
+  var contents = list[0];
+  if (!contents || !contents.document || !contents.range) return null;
+  var startR = null, endR = null;
+  try {
+    startR = contents.range(loc.start.cfi);
+    endR = contents.range(loc.end.cfi);
+  } catch (e) {}
+  if (!startR || !endR) return null;
+  var stream = pageTextStream(contents, startR, endR);
+  if (!stream) return null;
+  var spans = ttsSentenceSpans(stream.full, stream.breaks);
+  var out = [];
+  for (var i = 0; i < spans.length; i++) {
+    var text = cleanText(stream.full.slice(spans[i].s, spans[i].e));
+    if (!text) continue;
+    var cfi = null;
+    try {
+      if (typeof contents.cfiFromRange === 'function') {
+        var a = ttsStreamPoint(stream.segs, spans[i].s, false);
+        var b = ttsStreamPoint(stream.segs, spans[i].e, true);
+        var range = stream.doc.createRange();
+        range.setStart(a.node, a.off);
+        range.setEnd(b.node, b.off);
+        cfi = contents.cfiFromRange(range);
+      }
+    } catch (e) { cfi = null; }
+    out.push({ text: text, cfi: cfi });
+  }
+  return out;
+}
+
+/* ---- the highlight ---------------------------------------------
+   One annotation, moved sentence by sentence. Warm amber at
+   partial opacity reads on the cream page the reader ships with
+   and stays visible on a sepia or a dark page alike; blend mode
+   normal, so on dark pages it lays colour ON instead of
+   multiplying the page darker (the engine's default). */
+var TTS_HL_CLASS = 'ber-tts-hl';
+var TTS_HL_STYLES = { fill: '#ffa726', 'fill-opacity': '0.45', 'mix-blend-mode': 'normal' };
+function clearHighlight(){
+  if (speech.hlCfi && cur.rendition && cur.rendition.annotations) {
+    try { cur.rendition.annotations.remove(speech.hlCfi, 'highlight'); } catch (e) {}
+  }
+  speech.hlCfi = null;
+}
+function setHighlight(cfi){
+  clearHighlight();
+  if (!cfi || !cur.rendition || !cur.rendition.annotations) return;
+  try {
+    cur.rendition.annotations.highlight(cfi, {}, null, TTS_HL_CLASS, TTS_HL_STYLES);
+    speech.hlCfi = cfi;
+  } catch (e) {}
+}
+
+/* ---- the speech driver ----------------------------------------- */
+function speakCurrent(){
+  if (!speech.on) return;
+  var s = speech.sentences[speech.si];
+  if (!s) { advancePageOrFinish(); return; }
+  setHighlight(s.cfi);
   var id = 'ber' + (++speech.uid);
   speech.currentId = id;
-  var text = speech.chunks[speech.i];
   if (speech.useNative) {
-    try { ReaderBridge.speak(id, text); }
-    catch (e) { speech.useNative = false; speakNext(); }
+    try { ReaderBridge.speak(id, s.text); }
+    catch (e) { speech.useNative = false; speakCurrent(); }
   } else if (window.speechSynthesis) {
-    var u = new SpeechSynthesisUtterance(text);
+    var u = new SpeechSynthesisUtterance(s.text);
+    speech.u = u;   // held: a garbage-collected utterance can lose its onend
     var advance = function(){
-      if (speech.on && speech.currentId === id) { speech.i++; speakNext(); }
+      if (speech.on && speech.currentId === id) { speech.si++; speakCurrent(); }
     };
     u.onend = advance; u.onerror = advance;
     try { window.speechSynthesis.speak(u); }
@@ -719,17 +842,102 @@ function speakNext(){
     toast('Read-aloud is not available on this phone.', 4000);
   }
 }
+/* The page in view is read out: turn it and read on. The turn
+   that goes nowhere — the location stays exactly where it was,
+   with epub.js reporting the end of the book — is the finish. */
+function advancePageOrFinish(){
+  if (!speech.on || !cur.rendition || speech.turning) return;
+  speech.turning = true;
+  clearHighlight();
+  var run = speech.runId;
+  var before = null;
+  try {
+    var l0 = cur.rendition.currentLocation();
+    before = l0 && l0.start && l0.start.cfi;
+  } catch (e) {}
+  var settled = false;
+  function verdict(loc){
+    if (!loc || !loc.start) return 0;
+    if (before && loc.start.cfi && loc.start.cfi !== before) return 1;  // turned
+    if (loc.atEnd) return 2;                                            // end of book
+    return 0;
+  }
+  function settle(how){
+    if (settled) return;
+    settled = true;
+    speech.turning = false;
+    try { cur.rendition.off('relocated', onReloc); } catch (e) {}
+    if (!speech.on || run !== speech.runId) return;
+    if (how === 1) afterTurn(0);
+    else finishReading();
+  }
+  function checkNow(){
+    if (settled || !speech.on || run !== speech.runId) return;
+    var loc = null;
+    try { loc = cur.rendition.currentLocation(); } catch (e) {}
+    var v = verdict(loc);
+    if (v) settle(v);
+  }
+  function onReloc(loc){ var v = verdict(loc); if (v) settle(v); }
+  try { cur.rendition.on('relocated', onReloc); } catch (e) {}
+  var p = null;
+  try { p = cur.rendition.next(); } catch (e) {}
+  if (p && typeof p.then === 'function')
+    p.then(function(){ setTimeout(checkNow, 60); }, function(){ setTimeout(checkNow, 60); });
+  setTimeout(checkNow, 900);
+  /* Backstop: relocation is reliable in practice, but a turn
+     must never leave the voice waiting forever — after a long
+     silence, judge by the location itself. */
+  setTimeout(function(){
+    if (settled || !speech.on || run !== speech.runId) return;
+    var loc = null;
+    try { loc = cur.rendition.currentLocation(); } catch (e) {}
+    settle(verdict(loc) || 2);
+  }, 4000);
+}
+/* A page has just turned under the voice (or reading has just
+   started on this one): map its sentences and read on. A page
+   with nothing to say (a picture, a blank) is turned past; a
+   page whose innards lag behind the turn is retried briefly
+   before being counted as one. */
+function afterTurn(retries){
+  if (!speech.on) return;
+  var run = speech.runId;
+  var sents = buildPageSentences();
+  if (sents === null) {
+    if (retries < 10) {
+      setTimeout(function(){
+        if (speech.on && run === speech.runId) afterTurn(retries + 1);
+      }, 150);
+      return;
+    }
+    sents = [];
+  }
+  speech.sentences = sents;
+  speech.si = 0;
+  if (!sents.length) {
+    if (++speech.emptyTurns > 100) { finishReading(); return; }
+    advancePageOrFinish();
+    return;
+  }
+  speech.emptyTurns = 0;
+  speakCurrent();
+}
+function finishReading(){
+  stopTTS();
+  toast('Finished reading');
+}
 window.__ttsOnDone = function(id){
   if (!speech.on || id !== speech.currentId) return;
-  speech.i++;
-  speakNext();
+  speech.si++;
+  speakCurrent();
 };
 window.__ttsOnError = window.__ttsOnDone;
 window.__ttsUnavailable = function(){
   if (!speech.on) return;
   if (speech.useNative && window.speechSynthesis) {
     speech.useNative = false;    // engine refused: try Web Speech once
-    speakNext();
+    speakCurrent();
   } else {
     stopTTS();
     toast('Read-aloud is not available on this phone.', 4000);
@@ -739,24 +947,23 @@ function startTTS(){
   if (!cur.rendition || !cur.book) return;
   speech.useNative = !!(window.ReaderBridge && ReaderBridge.speak);
   speech.on = true;
-  speech.i = 0; speech.chunks = [];
-  speech.nextSections = [];
-  var items = [];
-  try { items = cur.book.spine.items || []; } catch (e) {}
-  for (var k = currentSectionIndex() + 1; k < items.length; k++)
-    speech.nextSections.push(k);
+  speech.runId++;
+  speech.sentences = []; speech.si = 0; speech.hlCfi = null;
+  speech.turning = false; speech.emptyTurns = 0;
   $('ttsStopBtn').classList.remove('hidden');
   toast('Reading aloud — long-press again to stop');
-  textFromCurrentPage().then(function(t){
-    if (!speech.on) return;
-    speech.chunks = chunkText(t);
-    speech.i = 0;
-    speakNext();
-  });
+  /* From the TOP of the current page — the current location's
+     start is the page's first word — as it has been since v0.1.1.
+     afterTurn does the rest: map this page, speak it, turn, read on. */
+  afterTurn(0);
 }
 function stopTTS(){
   speech.on = false;
-  speech.chunks = []; speech.nextSections = [];
+  speech.runId++;
+  speech.turning = false;
+  clearHighlight();
+  speech.sentences = []; speech.si = 0;
+  speech.u = null;
   try { if (window.ReaderBridge && ReaderBridge.stopSpeaking) ReaderBridge.stopSpeaking(); } catch (e) {}
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
   $('ttsStopBtn').classList.add('hidden');

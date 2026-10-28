@@ -215,7 +215,7 @@ the game ecosystem uses:
   on purpose: file pick, folder tree, read-aloud, full screen, and
   the update machinery are all already in the base.
 
-### Read-aloud that turns its own pages (Joshua, 2026-10-28 12:33 — spec for web bundle 3, STAGED, not yet built)
+### Read-aloud that turns its own pages (Joshua, 2026-10-28 12:33 — implemented in web bundle 3)
 
 Joshua's words, organized: read-aloud must **turn the page itself** —
 when the voice finishes a page, the reader moves to the next page
@@ -235,6 +235,24 @@ stopping leaves him where the voice stopped.
 - Stopping — a second long-press, the Stop chip, or leaving the
   book — clears the highlight and halts speech and page-turning
   together.
+- **As shipped (bundle 3):** sentences are mapped per page in view
+  — the visible page's text is walked in reading order (footnote
+  asides excluded: they are pop-up material, not story text),
+  split into sentences with abbreviation/initial guards, and each
+  sentence's DOM range is converted to a CFI for the annotation
+  highlight (warm amber, translucent, blend normal so it stays
+  visible on light and dark pages). A page whose content is one
+  sentence running over the edge is read as far as the page goes
+  and continues on the next — the break the book's own pagination
+  makes. Page turns are judged by the rendition's relocated
+  location (a turn that goes nowhere, with the end of the book
+  reported, is the finish), with a location backstop so the voice
+  never waits forever. A page with nothing to say (a picture, a
+  blank) is turned past. Verified by a node harness against the
+  real app.js: exact spoken sequence across three pages in two
+  sections, hand-computed sentence→CFI endpoints, footnote aside
+  never read, stop mid-page, stop mid-turn, end-of-book finish,
+  on both the shell bridge and the Web Speech fallback.
 - **Granularity, honestly:** sentence-level highlighting is the
   floor the current shell guarantees — it already forwards
   utterance done/error to the web layer per utterance
@@ -245,8 +263,9 @@ stopping leaves him where the voice stopped.
   shell does **not** forward — its listener implements onStart,
   onDone, and onError only (MainActivity.java). Word-level
   therefore waits for a small shell increment (reader v0.1.3);
-  bundle 3 ships sentence-level and never promises word-level the
-  engine cannot supply.
+  bundle 3 ships sentence-level — as the shipped behaviour above
+  records — and never promises word-level the engine cannot
+  supply.
 
 ### Definition pop-ups
 - Books produced by Mollie carry EPUB 3 footnote definitions
