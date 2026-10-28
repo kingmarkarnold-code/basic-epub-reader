@@ -4,23 +4,22 @@ Joshua's own EPUB reader, started 2026-10-28.
 
 ## Why this exists
 
-Joshua reads reports and books delivered as EPUBs. The established readers each
-miss something he asked for:
+In Joshua's words: due to ads and the lack of finding a proper EPUB
+reader, I decided to create my own using the support of Meta's Muse
+AI system.
 
-- **Google Play Books** — clean and synced, but no pop-up footnote definitions.
-- **Moon+ Reader** — the bookshelf presentation Joshua likes and real pop-up
-  footnotes, but ads on the free tier, a settings maze, and no Google Drive
-  sync (it syncs through Dropbox instead).
+The free readers are ad-supported, and none of the readers he tried --
+Google Play Books, Moon+ Reader, ReadEra -- was the proper fit. So
+this reader is being built to his own spec, keeping the features he
+actually valued:
 
-So we build our own, taking the parts he actually valued:
-
-1. **A bookshelf like Moon+'s** — books laid out as covers on a shelf/grid,
+1. **A bookshelf like Moon+'s** -- books laid out as covers on a shelf/grid,
    the way Moon+ presents a library. This is the piece Joshua singled out.
-2. **Pop-up definitions for our own books** — the EPUBs Mollie produces carry
+2. **Pop-up footnote definitions** -- the EPUBs Mollie produces carry
    their definitions as EPUB 3 footnotes; this reader floats them over the
    page on tap, by design, guaranteed to match the books because both sides
    are ours.
-3. **A dictionary doorway for ordinary words** — like Moon+, the reader owns
+3. **A dictionary doorway for ordinary words** -- like Moon+, the reader owns
    no dictionary. It hands a pressed word to an installed dictionary app
    (GoldenDict or ColorDict) which floats the meaning. Our own terms are
    authored into dictionary files (see `docs/DICTIONARY.md`), so Joshua's
