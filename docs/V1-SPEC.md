@@ -5,6 +5,9 @@ records them so the build can be checked against them.
 
 ## What Joshua asked for
 
+- Why this app exists, in Joshua's words: due to ads and the lack of
+  finding a proper EPUB reader, he decided to create his own using the
+  support of Meta's Muse AI system.
 - An app like Moon+ Reader is **not** needed for Moon+'s sake — what he valued
   is (a) the way Moon+ puts books on the screen **in the library**, which we
   mimic, and (b) some of its features, which we implement selectively.
@@ -31,7 +34,7 @@ records them so the build can be checked against them.
 - Table of contents drawer; in-book search; bookmarks.
 - Remembers the reading place per book, on the device, with no account.
 
-### Definition pop-ups (the reason the app exists)
+### Definition pop-ups
 - Books produced by Mollie carry EPUB 3 footnote definitions
   (`epub:type="noteref"` → footnote asides). Tapping a defined term floats
   the definition over the page; tap anywhere else to dismiss. No page jump.
