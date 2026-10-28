@@ -643,12 +643,25 @@ var TTS_BLOCK_TAGS = { P:1, H1:1, H2:1, H3:1, H4:1, H5:1, H6:1, LI:1,
   BLOCKQUOTE:1, TD:1, TH:1, DIV:1, SECTION:1, ARTICLE:1, DT:1, DD:1,
   FIGCAPTION:1, CAPTION:1, PRE:1, ADDRESS:1 };
 function ttsSkippedEl(el){
-  /* Never read aloud: scripts/styles, and footnote asides (the
+  /* Never read aloud: scripts/styles, footnote asides (the
      sample book's definitions live in asides — they are pop-up
-     material, not story text). */
+     material, not story text), anything the book itself hides —
+     a hidden attribute or aria-hidden="true" (an EPUB nav
+     page-list hides exactly this way, and its raw link labels
+     are not story text) — and footnote blocks by class, for
+     books whose definitions live in classed divs rather than
+     asides. Defence in depth: any one of these marks is enough. */
   var tag = el.tagName || '';
   if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'ASIDE')
     return true;
+  try {
+    if (el.hasAttribute && el.hasAttribute('hidden')) return true;
+    var ah = el.getAttribute ? el.getAttribute('aria-hidden') : null;
+    if (ah !== null && ah !== 'false') return true;
+    if (el.classList && el.classList.contains &&
+        (el.classList.contains('footnotes') || el.classList.contains('footnote')))
+      return true;
+  } catch (e) {}
   var type = '';
   try {
     type = (el.getAttribute && (el.getAttribute('epub:type') || el.getAttribute('role'))) || '';
@@ -681,13 +694,43 @@ function pageTextStream(contents, startR, endR){
   })(doc.body, false);
   var si = nodes.indexOf(startR.startContainer);
   var ei = nodes.indexOf(endR.endContainer);
-  if (si < 0 || ei < 0 || ei < si) return null;
+  var siExact = si >= 0, eiExact = ei >= 0;
+  if (!siExact || !eiExact) {
+    /* A range boundary can sit inside a subtree the walk skips —
+       a chapter's last page typically ENDS inside its footnote
+       asides. The boundary node is then missing from the list,
+       and giving up here (null) made the voice skip the whole
+       page, story text and all. Fall back to the nearest listed
+       nodes in document order. A boundary from a DIFFERENT
+       document means the contents still lag the location —
+       keep returning null so the caller retries that instead. */
+    if (!startR.startContainer || !endR.endContainer ||
+        startR.startContainer.ownerDocument !== doc ||
+        endR.endContainer.ownerDocument !== doc)
+      return null;
+    if (!siExact) {
+      for (var a = 0; a < nodes.length; a++) {
+        if (startR.startContainer.compareDocumentPosition(nodes[a]) & 4) { si = a; break; }
+      }
+    }
+    if (!eiExact) {
+      for (var b = nodes.length - 1; b >= 0; b--) {
+        if (endR.endContainer.compareDocumentPosition(nodes[b]) & 2) { ei = b; break; }
+      }
+    }
+    /* Nothing readable lies inside the range (a page showing
+       only the footnote block): an empty stream, [] downstream —
+       "genuinely nothing to say", not "cannot reach it". */
+    if (si < 0 || ei < 0 || ei < si)
+      return { segs: [], full: '', breaks: [], doc: doc };
+  }
+  if (ei < si) return null;
   var segs = [], full = '', breaks = [], prevBlock;
   for (var i = si; i <= ei; i++) {
     var node = nodes[i];
     var data = node.data != null ? String(node.data) : String(node.textContent || '');
-    var from = (i === si) ? startR.startOffset : 0;
-    var to = (i === ei) ? endR.endOffset : data.length;
+    var from = (i === si && siExact) ? startR.startOffset : 0;
+    var to = (i === ei && eiExact) ? endR.endOffset : data.length;
     if (to <= from) continue;
     var block = ttsBlockOf(node);
     if (prevBlock !== undefined && block !== prevBlock && full.length > 0)
