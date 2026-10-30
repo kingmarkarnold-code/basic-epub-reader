@@ -1,9 +1,9 @@
 {
-  "bundleVersion": 6,
+  "bundleVersion": 7,
   "files": {
     "app.js": {
       "path": "files/app.js",
-      "sha256": "238a8f9e6b815641758cdab7b0e59c231931f96ff73efd9f199f3b02835afdba"
+      "sha256": "b3fa4ed3ddee8cd7df461fcf4f795136a44e5b0806acf299fb8680c9f3a64a1b"
     },
     "index.html": {
       "path": "files/index.html",
@@ -19,6 +19,6 @@
     }
   },
   "minShellVersion": 4,
-  "note": "Web bundle 6 - read-aloud repair: defined terms are spoken in place again. Bundle 5's footnote skip also swallowed the marked terms themselves, so a sentence came out as 'Words marked in blue, like , carry their meaning' and 'The publishes a number'. The anchors that carry a term are story text and are read; the footnote definitions they point at stay tap-only, exactly as bundle 5 left them.",
-  "publishedAt": "2026-10-28"
+  "note": "Web bundle 7 - the reading view scrolls. Joshua, reading on the TCL (2026-10-30): he rotated the phone mid-page and the words reflowed fine, but a drag did nothing and the rest of the page could not be reached - the book was rendered paginated, every page clipped to exactly the screen with overflow hidden, so no surface on the page could scroll. The rendition now uses epub.js scrolled flow with the continuous manager: one tall scrolling view of the whole book. A drag scrolls the text; the edge tap zones still turn, stepping one screenful; a drag that starts on an edge zone scrolls as well; read-aloud takes its sentences from the section actually in view (scrolled flow keeps several loaded at once). Tap-to-fullscreen, footnote pop-ups and pinch text size are unchanged.",
+  "publishedAt": "2026-10-30"
 }
