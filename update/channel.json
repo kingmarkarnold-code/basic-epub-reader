@@ -1,1 +1,24 @@
-{"bundleVersion":8,"files":{"app.js":{"path":"files/app.js","sha256":"c0fe73fe7893e7db1938bc5466d3238fd0db4332626be9a71ee384bb3181fa51"},"index.html":{"path":"files/index.html","sha256":"748a10f12770cda9f608056452f9725efad88ed314ddfa4303eecf63b6c67f71"},"style.css":{"path":"files/style.css","sha256":"65dd366dfa68abb11daf77695bf2b7523a1ea5c95f8ab03c16d66589e278c95e"},"sync-client.js":{"path":"files/sync-client.js","sha256":"6e416fac60a85266f2f2a4fe3ea8c433c397adc092ac223de51c34a8a850ca4c"}},"minShellVersion":4,"note":"Web bundle 8 - pictures, a folder check that speaks up, and error reports home. Four things, all from Joshua on 2026-10-30: (1) Tap a picture in a book and it opens on its own full screen, fitted so the whole picture is visible; it scrolls and pans so every part is reachable, one tap zooms it to full size, and the X in the top-right corner closes it (a tap or the Back button also closes it) and returns to the exact place in the book. (2) The automatic folder check on open could spend its one attempt before the phone side was ready and never try again - it now retries until a scan actually starts, and when a check (automatic or manual) adds books, the library says so in a notice naming each book: '[title] is now part of your library.' Nothing added, nothing said. A damaged book in a folder can no longer wedge the scan half-finished: a book that will not parse in 30 seconds is counted unreadable and the scan completes. (3) Errors now report silently and automatically to the same Player Reports inbox as the game and the editors, as 'Reader Report' - folder scans that cannot reach a folder, files that cannot be read, books that will not open, session errors; each distinct failure reports once, and reports queue on the phone while offline and send on a later launch. The scrolling reading view from bundle 7 is unchanged.","publishedAt":"2026-10-30"}
+{
+  "bundleVersion": 9,
+  "files": {
+    "app.js": {
+      "path": "files/app.js",
+      "sha256": "8d9c033b9803a3d0cc95060ef634c4b45ff4a8f33f007ba1d7ec18d37605e61a"
+    },
+    "index.html": {
+      "path": "files/index.html",
+      "sha256": "748a10f12770cda9f608056452f9725efad88ed314ddfa4303eecf63b6c67f71"
+    },
+    "style.css": {
+      "path": "files/style.css",
+      "sha256": "bbb6bf23c431605351b71286554ba433e33b0e971c02aba32dfe6507a08b721d"
+    },
+    "sync-client.js": {
+      "path": "files/sync-client.js",
+      "sha256": "6e416fac60a85266f2f2a4fe3ea8c433c397adc092ac223de51c34a8a850ca4c"
+    }
+  },
+  "minShellVersion": 4,
+  "note": "Web bundle 9 - the reader speaks up, pictures open, taps step one screenful, and full screen keeps text off the glass edge. (1) Silent failures report home: a damaged book gets 30 seconds to be read and no more, so one corrupt file can no longer wedge a folder check without a word; and the errors the app meets - a book that will not open, a scan that fails - are sent to the same Player Reports inbox the game uses. (2) When a folder check brings in new books, the shelf says so and names them, instead of the books simply appearing (or, as it felt, not). (3) Tapping a picture in a book opens it on the whole screen: fitted so the whole picture shows, scrollable at full size, an X at the top right to close, and the reading place underneath untouched. (4) The edge tap zones no longer make epub.js's section step: reading the Tailscale book (Joshua, 2026-10-30), one NEXT tap in chapter 1 jumped to the chapter's end, PREVIOUS jumped back to the contents, and other taps landed mid-content and at chapter starts - the paragraphs that felt missing were being stepped over. The book is one continuous stream and a tap now steps the scroll by exactly one screenful, laid on a fixed ladder of screenfuls from the top of the book with about a line and a half of overlap, so NEXT and PREV land on the same screenfuls in both directions; a chapter's end shows its partial screen and the next tap carries across the seam, exactly like scrolling across it. (5) In full screen the viewer itself is inset on all four sides - the larger of a small fixed buffer (14px top/bottom, 12px sides) and the phone's own safe-area inset - so the topmost and bottommost lines and the text near the rounded corners no longer sit in the slightly faded edge zone. Outside full screen nothing changes. Scrolled flow, drag-scrolling from the zones, read-aloud from the view, pinch text size and footnote pop-ups are unchanged.",
+  "publishedAt": "2026-10-30"
+}
