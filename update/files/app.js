@@ -4,7 +4,7 @@
    the original file on the phone / in Drive is never touched. */
 'use strict';
 
-/* The web bundle THIS code belongs to (bundle 10). The number
+/* The web bundle THIS code belongs to (bundle 11). The number
    travels inside app.js itself, so the version the shelf footer
    shows is the version of the code actually running — the two
    can never disagree. Bundle 9's footer instead asked the shell
@@ -17,8 +17,13 @@
    the shell reports a newer bundle downloaded or serving than
    the code running, the footer now says so plainly and tells
    him a full close-and-reopen applies it (see updateVerLine).
-   Bump this constant by hand with every published bundle. */
-var WEB_BUNDLE = 10;
+   Bump this constant by hand with every published bundle.
+   Bundle 11 is diagnostics-first (see the scroll diagnostics
+   section): it changes no reading behaviour — it measures the
+   scroll path on the device itself, because bundle 10's scroll
+   rework still did not scroll in Joshua's hands on his TCL
+   while the same code scrolled in desktop Chromium. */
+var WEB_BUNDLE = 11;
 
 /* ---------------- helpers ---------------- */
 function $(id){ return document.getElementById(id); }
@@ -409,6 +414,14 @@ async function openBook(id){
   await rendition.display(saved.cfi || undefined);
   attachToLiveContents();
   scheduleViewAudit();
+  /* Bundle 11 (diagnostics only — no behaviour change): arm
+     the one-shot drag probe onto the live documents, and once
+     the stream has settled, measure the scroll path and
+     report it home (see the scroll diagnostics section). */
+  armDragProbe();
+  setTimeout(function(){
+    if (cur.rendition === rendition) runBookOpenDiagnostics();
+  }, 1200);
   /* Bundle 10: once the first paint has settled, have epub.js
      re-measure the viewer and re-audit the view heights — the
      belt to the waitForViewerSize braces, for WebViews whose
@@ -422,6 +435,7 @@ async function openBook(id){
   try { rendition.on('rendered', function(){
     attachToLiveContents();
     scheduleViewAudit();
+    diagArmDocs();   /* bundle 11: keep the drag probe on the live documents */
   }); } catch (e) {}
     book.locations.generate(1024).catch(function(){});
   } catch (err) {
@@ -1707,6 +1721,302 @@ window.addEventListener('unhandledrejection', function(ev){
   var r = ev && ev.reason;
   reportError('Session', 'Unhandled rejection: ' +
     String(r && r.message ? r.message : r).slice(0, 300));
+});
+
+/* ================= scroll diagnostics (bundle 11) ==============
+   WHY THIS EXISTS (Joshua's hands, 2026-10-30): bundle 9 would
+   not scroll on his TCL. Bundle 10 removed the presumed cause —
+   dependence on the WebView chaining a drag that starts on a
+   book page up to epub.js's scroll container — by walking the
+   container from the gesture layer instead, and in his hands
+   bundle 10 STILL would not scroll ("the update had applied;
+   scrolling was still not enabled"), while the same code
+   scrolls in desktop Chromium. Two blind fixes are enough:
+   this bundle changes NO reading behaviour. It measures the
+   scroll path on the device itself and reports what it finds,
+   so the next fix is aimed at evidence from his WebView.
+
+   WHAT IT MEASURES (about a second after every book open, and
+   on demand from the shelf's Diagnostics button):
+   - the bundle RUNNING (WEB_BUNDLE, inside this file) beside
+     the bundle the shell says it is SERVING — if those differ,
+     the code under his finger is not the code the update
+     delivered, whatever any toast said;
+   - the epub.js scroll container (scrollContainer()): its
+     identity, checked two ways — the node the rendition's
+     manager holds vs the .epub-container the page displays;
+   - the container's clientHeight vs scrollHeight: a container
+     whose scrollHeight does not exceed its clientHeight cannot
+     scroll at all, whatever the gesture layer does, and
+     neither can a finger;
+   - a PROGRAMMATIC SCROLL TEST on that container: set
+     scrollTop by +100 (or -100 when near the end), read it
+     straight back, restore it. If the assignment does not move
+     it, the element is not a working scroller on this engine
+     and no gesture code can scroll the book through it;
+   - the same heights for #viewer and the document's own
+     scrolling element — the other places the stream could be
+     hiding;
+   - each live section: its iframe's height vs its document's
+     full height, and whether the gesture handlers are on it;
+   - a one-shot DRAG PROBE: purely passive listeners (a passive
+     listener cannot preventDefault, so the probe can only
+     watch, never interfere) count the touchmove events ONE
+     real finger drag delivers to the page documents, the
+     parent document and the tap zones, and record the
+     container's scrollTop before and after. That separates
+     "the moves never reach the handlers" from "the moves
+     arrive but the container does not move" — the two families
+     of causes no desktop test can tell apart on his WebView.
+   Results are kept in localStorage, shown on the shelf's
+   Diagnostics panel, and sent home through the bundle-8
+   Reader Report pipe. Auto reports ride reportError (one per
+   distinct outcome per bundle); the panel's Send button uses
+   reportDiag with force, so a report he asks for always goes. */
+var DIAG_KEY_LAST = 'ber-diag-last';   // last book-open measurement {ts, text}
+var DIAG_KEY_DRAG = 'ber-diag-drag';   // last completed drag probe {ts, text}
+
+function diagElName(el){
+  if (!el) return 'none';
+  var s = String(el.tagName || '?').toLowerCase();
+  if (el.id) s += '#' + el.id;
+  if (el.className && typeof el.className === 'string')
+    s += '.' + el.className.trim().split(/\s+/).join('.');
+  return s;
+}
+function diagHeights(el){
+  if (!el) return 'missing';
+  return 'client ' + el.clientHeight + ' · scroll ' + el.scrollHeight +
+         ' · top ' + el.scrollTop;
+}
+/* The programmatic scroll test described above. Resolves
+   {before, read, moved} — moved says the assignment took. */
+function diagScrollTest(el){
+  return new Promise(function(res){
+    if (!el) return res({ before: 0, read: 0, moved: false });
+    var before = el.scrollTop;
+    var delta = before >= 100 ? -100 : 100;
+    try { el.scrollTop = before + delta; } catch (e) {}
+    var read = el.scrollTop;
+    try { el.scrollTop = before; } catch (e) {}
+    res({ before: before, read: read, moved: read !== before });
+  });
+}
+/* Force-send variant of reportError for the panel's Send
+   button: same queue, same pipe, but the signature carries a
+   timestamp, so a report Joshua asks for is never swallowed
+   by the once-per-outcome dedupe the automatic reports use. */
+function reportDiag(where, text, force){
+  if (!force) { reportError(where, text); return; }
+  try {
+    var queue = reportStore('ber-report-queue', []);
+    queue.push({ sig: where + '|manual|' + Date.now(), where: where,
+      message: String(text).slice(0, 1500), version: readerVersionTag(),
+      device: String(navigator.userAgent || '').slice(0, 300),
+      ts: Date.now() });
+    while (queue.length > 20) queue.shift();
+    reportSave('ber-report-queue', queue);
+    flushReports();
+  } catch (e) { /* reporting must never break the reader */ }
+}
+/* Collect one measurement. trigger is 'book open' or 'shelf'.
+   Resolves {text, headline, short}: headline carries the
+   discriminating numbers on its first line (reportError's
+   dedupe keys on it, so distinct outcomes report distinctly
+   and repeats of the same outcome do not flood the inbox). */
+function diagCollect(trigger){
+  var lines = [];
+  var serving = null, shell = '?';
+  try {
+    if (window.ReaderBridge) {
+      if (ReaderBridge.webBundleVersion) serving = ReaderBridge.webBundleVersion();
+      if (ReaderBridge.shellVersionName) shell = ReaderBridge.shellVersionName();
+    }
+  } catch (e) {}
+  lines.push('trigger: ' + trigger);
+  lines.push('running: web bundle ' + WEB_BUNDLE + ' · shell serving ' +
+    (serving == null ? '?' : serving) + ' · shell ' + shell);
+  lines.push('ua: ' + String(navigator.userAgent || '').slice(0, 120));
+  lines.push('view: ' + window.innerWidth + 'x' + window.innerHeight +
+    ' · dpr ' + (window.devicePixelRatio || 1));
+  var c = scrollContainer();
+  var shown = null;
+  try { shown = document.querySelector('#viewer .epub-container'); } catch (e) {}
+  var testP = Promise.resolve(null);
+  if (c) {
+    var cs = null;
+    try { cs = window.getComputedStyle(c); } catch (e) {}
+    lines.push('container: ' + diagElName(c) +
+      ' · manager node = shown node: ' + (shown ? (c === shown ? 'yes' : 'NO') : '?'));
+    lines.push('container size: ' + diagHeights(c));
+    lines.push('container style: overflow-y ' + (cs ? cs.overflowY : '?') +
+      ' · overflow ' + (cs ? cs.overflow : '?') +
+      ' · touch-action ' + (cs ? cs.touchAction : '?'));
+    testP = diagScrollTest(c);
+  } else {
+    lines.push('container: none' + (trigger === 'book open'
+      ? ' — NO SCROLL CONTAINER WITH A BOOK OPEN' : ' (no book open)'));
+  }
+  var v = $('viewer');
+  lines.push('viewer: ' + diagElName(v) + ' · ' + diagHeights(v));
+  var se = document.scrollingElement;
+  lines.push('document scroller: ' + diagElName(se) + ' · ' + diagHeights(se));
+  var secLine = 'sections: none live';
+  try {
+    if (cur.rendition && cur.rendition.getContents) {
+      var list = cur.rendition.getContents() || [];
+      var parts = [], allG = true;
+      for (var i = 0; i < list.length; i++) {
+        var doc = list[i] && list[i].document;
+        if (!doc) continue;
+        var frame = doc.defaultView && doc.defaultView.frameElement;
+        parts.push((frame ? frame.clientHeight : '?') + '/' + contentHeightOf(doc));
+        if (!doc.__berGestures) allG = false;
+      }
+      if (parts.length)
+        secLine = 'sections: ' + parts.length + ' live · frame/content ' +
+          parts.join(', ') + ' · gestures on: ' + (allG ? 'yes' : 'NO');
+    }
+  } catch (e) {}
+  lines.push(secLine);
+  var drag = reportStore(DIAG_KEY_DRAG, null);
+  lines.push('last drag: ' + (drag && drag.text ? drag.text : 'none recorded yet'));
+  return testP.then(function(t){
+    var verdict = 'no container';
+    if (c && t) {
+      verdict = 'test move ' + (t.moved ? 'OK' : 'FAILED') +
+        ' (' + t.before + ' -> ' + t.read + ')';
+      lines.push('container test: scrollTop ' + t.before + ' -> set ' +
+        (t.before >= 100 ? '-100' : '+100') + ' -> read ' + t.read +
+        (t.moved ? ' · MOVED' : ' · DID NOT MOVE'));
+    }
+    var headline = 'Scroll diagnostics (' + trigger + ') — web bundle ' +
+      WEB_BUNDLE + ' running, shell serving ' +
+      (serving == null ? '?' : serving) + '; container ' +
+      (c ? ('scroll ' + c.scrollHeight + ' vs client ' + c.clientHeight)
+         : 'none') + '; ' + verdict;
+    return { text: lines.join('\n'), headline: headline,
+             short: (c ? ('stream ' + c.scrollHeight + 'px in a ' +
+               c.clientHeight + 'px window · ') : 'no container · ') +
+               verdict.replace('test move ', 'move ') };
+  });
+}
+/* The automatic book-open measurement: collect, keep for the
+   panel, report home, and put the headline in a long toast so
+   Joshua can read the two numbers that matter without hunting
+   for them. Runs once per open, ~1.2 s in, when the stream
+   has settled. */
+function runBookOpenDiagnostics(){
+  diagCollect('book open').then(function(d){
+    reportSave(DIAG_KEY_LAST, { ts: Date.now(), text: d.text });
+    reportError('Scroll diagnostics', d.headline + '\n' + d.text);
+    toast('Scroll check: ' + d.short, 6000);
+  });
+}
+/* ---- the one-shot drag probe ----
+   Armed on every book open (and re-armed onto fresh section
+   documents as they render). Passive listeners only — they
+   cannot call preventDefault, so the probe cannot change how
+   any drag behaves; it only counts. The first completed drag
+   is stored and reported, then the probe disarms itself. */
+var dragProbe = null;
+function diagProbeFinish(p){
+  if (p.finished) return;
+  p.finished = true;
+  var c = scrollContainer();
+  var endTop = c ? c.scrollTop : null;
+  var movedTxt = 'container top unknown';
+  if (p.startTop != null && endTop != null)
+    movedTxt = 'container scrollTop ' + p.startTop + ' -> ' + endTop +
+      (endTop !== p.startTop ? ' · MOVED' : ' · DID NOT MOVE');
+  var text = 'moves page ' + p.counts.page + ' · parent ' + p.counts.parent +
+    ' · zone ' + p.counts.zone + ' · ' + movedTxt;
+  reportSave(DIAG_KEY_DRAG, { ts: Date.now(), text: text });
+  var d = reportStore(DIAG_KEY_LAST, null);
+  reportError('Scroll diagnostics',
+    'Drag probe (web bundle ' + WEB_BUNDLE + ' running) — ' + text +
+    (d && d.text ? '\n' + d.text : ''));
+  diagProbeDisarm();
+}
+function diagProbeDisarm(){
+  if (!dragProbe) return;
+  dragProbe.detachers.forEach(function(d){
+    try { d[0].removeEventListener(d[1], d[2], d[3]); } catch (e) {}
+  });
+  dragProbe = null;
+}
+function diagProbeArmOn(target, surface, p){
+  if (!target || target.__berDiagProbe) return;
+  target.__berDiagProbe = true;
+  function onStart(){
+    if (p.startTop === null) {
+      var c = scrollContainer();
+      p.startTop = c ? c.scrollTop : null;
+    }
+  }
+  function onMove(ev){
+    if (surface === 'parent' && ev.target &&
+        (ev.target.id === 'tapLeft' || ev.target.id === 'tapRight')) return;
+    p.counts[surface]++;
+  }
+  function onEnd(){
+    if (p.ended) return;
+    p.ended = true;
+    setTimeout(function(){ diagProbeFinish(p); }, 450);
+  }
+  target.addEventListener('touchstart', onStart, { passive: true });
+  target.addEventListener('touchmove', onMove, { passive: true });
+  target.addEventListener('touchend', onEnd, { passive: true });
+  p.detachers.push([target, 'touchstart', onStart, { passive: true }]);
+  p.detachers.push([target, 'touchmove', onMove, { passive: true }]);
+  p.detachers.push([target, 'touchend', onEnd, { passive: true }]);
+}
+function armDragProbe(){
+  diagProbeDisarm();
+  var p = { counts: { page: 0, parent: 0, zone: 0 },
+            startTop: null, ended: false, finished: false, detachers: [] };
+  dragProbe = p;
+  diagProbeArmOn(document, 'parent', p);
+  diagProbeArmOn($('tapLeft'), 'zone', p);
+  diagProbeArmOn($('tapRight'), 'zone', p);
+  diagArmDocs();
+}
+/* Arm the probe onto the live section documents (they recycle
+   as the book re-paginates, so this re-runs as sections
+   render — the same insurance attachToLiveContents keeps). */
+function diagArmDocs(){
+  if (!dragProbe || dragProbe.finished) return;
+  try {
+    if (!cur.rendition || !cur.rendition.getContents) return;
+    var list = cur.rendition.getContents() || [];
+    for (var i = 0; i < list.length; i++)
+      if (list[i] && list[i].document)
+        diagProbeArmOn(list[i].document, 'page', dragProbe);
+  } catch (e) {}
+}
+/* ---- the shelf Diagnostics panel ---- */
+var diagShownText = '';
+function showDiagPanel(){
+  $('diagPanel').classList.remove('hidden');
+  $('diagText').textContent = 'Measuring…';
+  diagCollect('shelf').then(function(d){
+    var last = reportStore(DIAG_KEY_LAST, null);
+    var txt = d.text;
+    if (last && last.text)
+      txt += '\n--- last book-open measurement ---\n' + last.text;
+    diagShownText = d.headline + '\n' + txt;
+    $('diagText').textContent = txt;
+  });
+}
+$('diagBtn').addEventListener('click', showDiagPanel);
+$('diagClose').addEventListener('click', function(){
+  $('diagPanel').classList.add('hidden');
+});
+$('diagRefresh').addEventListener('click', showDiagPanel);
+$('diagSend').addEventListener('click', function(){
+  if (!diagShownText) return;
+  reportDiag('Scroll diagnostics', diagShownText, true);
+  toast('Diagnostics sent — thank you.');
 });
 
 /* ================= folder import (Joshua, 2026-10-28) ==========
