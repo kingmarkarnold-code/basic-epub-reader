@@ -13,6 +13,13 @@
 </head>
 <body>
 
+<!-- Page claim (bundle 12): this page stamps the bundle it
+     belongs to, so the script running on it can name a
+     page/script mismatch in its reports instead of silently
+     describing a mismatched pair. Hidden; read by pageClaim()
+     in app.js. -->
+<div id="pageMark" data-bundle="12" hidden></div>
+
 <!-- ============================ BOOKSHELF ============================ -->
 <div id="shelfView">
   <div class="topbar">
@@ -33,6 +40,12 @@
          what it found and can send the report home on demand. -->
     <button id="diagBtn" class="toolbtn">Diagnostics</button>
   </div>
+  <!-- Diagnostics bar (bundle 12): the same door as the toolbar
+       button, but full-width and impossible to miss — bundle
+       11's button sat in a wrapping five-button row on a small
+       screen and was looked straight past. app.js injects this
+       bar on any older page that lacks it (ensureDiagUI). -->
+  <button id="diagBar" class="diag-bar">Reader diagnostics — tap to view the scroll check</button>
   <div id="shelfScroll">
     <!-- Added-books notice (bundle 8 — Joshua, 2026-10-30): when a
          folder check brings new books, the shelf SAYS SO, naming
