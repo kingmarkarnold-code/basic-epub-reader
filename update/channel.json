@@ -1,17 +1,17 @@
 {
-  "bundleVersion": 10,
+  "bundleVersion": 11,
   "files": {
     "app.js": {
       "path": "files/app.js",
-      "sha256": "e357efa919c4f1e0bf447d7d1647839f28c6dddb7133bce1b7bb9f8b36d8473a"
+      "sha256": "e47c8360fe15c86dfb56102b6402e4f3f256aa9ba1684a605108fcdc9f9e7bda"
     },
     "index.html": {
       "path": "files/index.html",
-      "sha256": "d3ef028645659f3efcc52cd8319224274d86b1c0a46945f14bb6c1b0f0ec154d"
+      "sha256": "a0968e522534908ef81c2e81247f8754c1352b1409effa810239a9b83ee00d03"
     },
     "style.css": {
       "path": "files/style.css",
-      "sha256": "bbb6bf23c431605351b71286554ba433e33b0e971c02aba32dfe6507a08b721d"
+      "sha256": "71f9563b11044231587368df4bba1fe1809ef4ae96c1e573a70884cb384ca023"
     },
     "sync-client.js": {
       "path": "files/sync-client.js",
@@ -19,6 +19,6 @@
     }
   },
   "minShellVersion": 4,
-  "note": "Web bundle 10 - the reader walks its own stream, one tap is one page, sections cannot overlap, and the shelf says which bundle is truly running. (1) Scrolling no longer depends on the WebView chaining a drag that starts on a book page up to epub.js's scroll container: the gesture layer now walks that container by the finger's own delta, on the page and the edge zones alike, with a short decaying fling when a flick is released. Bundle 9 would not scroll at all in Joshua's hands on the TCL while the same code scrolled in desktop Chrome - the chaining is the WebView's choice, so the reader no longer asks it to choose. (2) One edge tap previously fired the page turn twice: the touch path served it, then the engine replayed the tap as compatibility mouse events and served it again - two screenful ladder rungs per tap. Taps now pass one gate that tells a replay (a different input path within 700 ms) from a genuine second tap (the same path again), so one tap steps exactly one screenful on the ladder and quick double taps still turn two pages. (3) epub.js sizes each section's box once, when the section loads; content that grows afterwards (a picture finishing, a font swapping in) spilled past the box and the next section printed over its tail - the overlapping words. The reader now audits its live sections against epub.js's own height measure after opens, renders, font changes, picture loads and full-screen settles, and grows any box that has come up short; it never shrinks one. (4) The shelf's version line names the bundle whose code is actually running - the number travels inside app.js itself. A bundle applies only at a true cold start, and bundle 9's passing toast could be read as the update being in while older code still served the touches; now, when a newer bundle is downloaded and waiting, the shelf keeps saying 'update N ready - close and reopen the reader to use it' until the running code catches up, and error reports name the running bundle too. Scrolled flow, the tap ladder, the safe-area full-screen buffer, picture viewing, read-aloud and footnote pop-ups are otherwise unchanged.",
+  "note": "Web bundle 11 - diagnostics for the scroll problem; no reading behaviour changes. Bundles 9 and 10 both left scrolling not working in Joshua's hands on the TCL while the same code scrolled in desktop Chrome, so this bundle stops guessing and measures the scroll path on the phone itself. About a second after a book opens it checks: which bundle is truly running versus which the shell is serving; whether the book's scroll container holds more stream than window, and by how much; whether setting that container's scroll position in code actually moves it; how each live section's frame compares with its content height; and, with passive watch-only listeners that cannot interfere with a drag, what one real finger drag delivers to the handlers and whether the container moves under it. Findings go home through the same Reader Report pipe as reader errors, the headline appears in a long toast at book open, and everything is kept for the shelf's new Diagnostics button, which shows the measurement and can send it on demand. Next to that evidence, the fix that follows will be aimed instead of blind. Reading behaviour is otherwise exactly bundle 10's.",
   "publishedAt": "2026-10-30"
 }
