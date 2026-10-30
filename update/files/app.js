@@ -4,6 +4,22 @@
    the original file on the phone / in Drive is never touched. */
 'use strict';
 
+/* The web bundle THIS code belongs to (bundle 10). The number
+   travels inside app.js itself, so the version the shelf footer
+   shows is the version of the code actually running — the two
+   can never disagree. Bundle 9's footer instead asked the shell
+   for its serving counter, and Joshua's hands-on report
+   (2026-10-30) showed the failure that makes possible: he could
+   see "web bundle 9" (a downloaded bundle's number, announced
+   by the update toast) while the code serving his touches was
+   still an older bundle — bundles apply only at a cold start,
+   and an Android "reopen" from recents is not always one. When
+   the shell reports a newer bundle downloaded or serving than
+   the code running, the footer now says so plainly and tells
+   him a full close-and-reopen applies it (see updateVerLine).
+   Bump this constant by hand with every published bundle. */
+var WEB_BUNDLE = 10;
+
 /* ---------------- helpers ---------------- */
 function $(id){ return document.getElementById(id); }
 var toastTimer = null;
@@ -296,6 +312,10 @@ async function openBook(id){
     var book = ePub(rec.data.slice(0));
     cur.book = book;
     await readyWithTimeout(book);
+    /* Bundle 10: epub.js measures its stage from the viewer the
+       moment renderTo runs — do not let it measure a viewer the
+       WebView has not laid out yet (see waitForViewerSize). */
+    await waitForViewerSize();
   /* Reading flow (bundle 7 — Joshua's hands-on report, 2026-10-30):
      the book SCROLLS. Under flow 'paginated' epub.js clips every
      page to exactly the screen and lays the text out in columns
@@ -341,6 +361,14 @@ async function openBook(id){
     if (!doc) return;
     attachFootnotePopups(doc);
     attachPictureTaps(doc);
+    /* Bundle 10: a picture that finishes loading grows its
+       section after epub.js sized the view — the moment the
+       height audit (below) exists for. Re-audit as each lands. */
+    var imgs = doc.querySelectorAll('img');
+    for (var ii = 0; ii < imgs.length; ii++) {
+      if (!imgs[ii].complete)
+        imgs[ii].addEventListener('load', scheduleViewAudit);
+    }
     /* Reading gestures live INSIDE the page: epub.js renders each
        page in an iframe whose touches never reach the outer page,
        so every section document gets its own gesture handlers.
@@ -374,12 +402,27 @@ async function openBook(id){
         JSON.stringify({ cfi: loc.start.cfi, pct: pct || 0, ts: Date.now() }));
     }, 350);
     attachToLiveContents();
+    scheduleViewAudit();   /* bundle 10: sections settle as the stream scrolls */
   });
 
   var saved = progressOf(rec);
   await rendition.display(saved.cfi || undefined);
   attachToLiveContents();
-  try { rendition.on('rendered', function(){ attachToLiveContents(); }); } catch (e) {}
+  scheduleViewAudit();
+  /* Bundle 10: once the first paint has settled, have epub.js
+     re-measure the viewer and re-audit the view heights — the
+     belt to the waitForViewerSize braces, for WebViews whose
+     first layout still shifts after display. Guarded to this
+     rendition: a book closed in the meantime is left alone. */
+  setTimeout(function(){
+    if (cur.rendition !== rendition) return;
+    try { rendition.resize(); } catch (e) {}
+    auditViewHeights();
+  }, 600);
+  try { rendition.on('rendered', function(){
+    attachToLiveContents();
+    scheduleViewAudit();
+  }); } catch (e) {}
     book.locations.generate(1024).catch(function(){});
   } catch (err) {
     /* A book that will not open reports home (bundle 8) and the
@@ -434,6 +477,58 @@ var lastTapHandledAt = 0;   // stamped whenever a tap/hold/pinch completes,
                             // so the click fallback below can tell a tap
                             // it already served from one it never saw
 
+/* ============ hand-walked scrolling (bundle 10) =================
+   A drag on the page must scroll the book's one stream (Joshua's
+   flow model). epub.js renders each section in an iframe whose
+   document cannot scroll (the iframe is sized to its content),
+   so a drag that starts on the page can only move the book if
+   the epub.js CONTAINER scrolls — and whether a touch that lands
+   on an iframe chains up to that container is the WebView's
+   choice, not the page's. On Joshua's TCL it did not chain:
+   bundle 9 in his hands would not scroll from the page at all
+   (hands-on report, 2026-10-30), while the same code scrolled
+   in desktop Chrome. So the gesture layer no longer asks the
+   engine to chain anything: a travelling single finger WALKS
+   the container itself, by exactly the finger's delta — the
+   mechanism the tap zones have used since bundle 7
+   (attachZoneDragScroll, now folded into attachGestures),
+   extended to the page documents themselves. touchmove is
+   preventDefaulted once a drag is walking, so an engine that
+   WOULD have chained cannot double the motion; the visible
+   result is the same finger-follow scroll everywhere. A quick
+   flick keeps a short decaying fling (below) so the stream
+   still glides the way a native scroll would. */
+var scrollFling = { raf: 0, v: 0 };
+function cancelScrollFling(){
+  if (scrollFling.raf) cancelAnimationFrame(scrollFling.raf);
+  scrollFling.raf = 0; scrollFling.v = 0;
+}
+function walkScrollBy(dy){
+  var c = scrollContainer();
+  if (!c) return false;
+  c.scrollTop += dy;
+  return true;
+}
+function startScrollFling(v0){
+  cancelScrollFling();
+  var c = scrollContainer();
+  if (!c || !isFinite(v0) || v0 === 0) return;
+  scrollFling.v = v0;
+  var last = performance.now();
+  (function step(now){
+    scrollFling.raf = 0;
+    var dt = Math.min(50, Math.max(0, now - last)); last = now;
+    if (dt > 0) {
+      var before = c.scrollTop;
+      c.scrollTop = before + scrollFling.v * dt;
+      if (c.scrollTop === before) return;   // hit the start/end of the book
+      scrollFling.v *= Math.pow(0.90, dt / 16.7);
+      if (Math.abs(scrollFling.v) < 0.02) return;
+    }
+    scrollFling.raf = requestAnimationFrame(step);
+  })(last);
+}
+
 function attachGestures(target, handlers){
   /* Idempotent: epub.js page documents are recycled as the book
      re-paginates, and attachToLiveContents() re-asserts these
@@ -442,6 +537,36 @@ function attachGestures(target, handlers){
   if (!target || target.__berGestures) return;
   target.__berGestures = true;
   var press = null, pinch = null;
+  /* One physical tap, one onTap (bundle 10): a tap on a touch
+     screen is delivered MORE THAN ONCE — the touch path fires
+     on touchend, and unless the touch was preventDefaulted the
+     engine then replays it as compatibility mouse events
+     (mousedown/mouseup) and a click. Bundle 9's guards only
+     covered the click fallback, so the mouse replay reached
+     onTap a second time: measured in the bundle-10 harness,
+     ONE tap on an edge zone ran turnPage TWICE — two ladder
+     rungs per tap, which reads as "taps still jump too far".
+     Every path now fires through fireTap, which tells a replay
+     from a new tap by WHICH path delivered it: a different path
+     within 700 ms is the same tap's echo and is dropped, while
+     the same path firing again is a new tap (a reader tapping
+     twice in quick succession still turns two pages — only a
+     sub-250 ms same-path bounce is dropped). */
+  var lastFireAt = 0, lastFireKind = '';
+  function fireTap(el, kind){
+    var now = Date.now();
+    var gap = now - lastFireAt;
+    if (lastFireKind && kind !== lastFireKind && gap < 700) return;
+    if (kind === lastFireKind && gap < 250) return;
+    lastFireAt = now; lastFireKind = kind;
+    lastTapHandledAt = now;
+    if (handlers.onTap) handlers.onTap(el);
+  }
+  /* Single-finger drag state for the hand-walked scroll (see
+     the bundle-10 note at walkScrollBy): last finger Y, the
+     smoothed velocity (px/ms) for the release fling, and
+     whether this touch has actually walked yet. */
+  var dragWalk = null;
   function armLong(st){
     st.longTimer = setTimeout(function(){
       st.longFired = true;
@@ -458,12 +583,15 @@ function attachGestures(target, handlers){
     return Math.sqrt(dx * dx + dy * dy);
   }
   target.addEventListener('touchstart', function(ev){
+    cancelScrollFling();   // a fresh touch always ends a fling
     if (ev.touches.length === 2) {
       if (press) { press.cancelled = true; disarm(press); }
+      dragWalk = null;
       pinch = { d0: tdist(ev.touches[0], ev.touches[1]) || 1,
                 pct0: cur.fontPct, applied: false };
     } else if (ev.touches.length === 1 && !pinch) {
       var t = ev.touches[0];
+      dragWalk = { y: t.clientY, v: 0, lastT: Date.now(), walked: false };
       press = { x: t.clientX, y: t.clientY, t0: Date.now(), targetEl: ev.target,
                 longFired: false, cancelled: false, longTimer: null };
       armLong(press);
@@ -479,30 +607,71 @@ function attachGestures(target, handlers){
         if (cur.rendition) cur.rendition.themes.fontSize(pct + '%');
         pinch.applied = true;
       }
-    } else if (press && ev.touches.length === 1 &&
-               movedAway(press, ev.touches[0].clientX, ev.touches[0].clientY)) {
-      press.cancelled = true; disarm(press);   // a drag is a swipe, not a tap/hold
+    } else if (ev.touches.length === 1) {
+      var t = ev.touches[0];
+      if (press && movedAway(press, t.clientX, t.clientY)) {
+        press.cancelled = true; disarm(press);   // a drag is a swipe, not a tap/hold
+      }
+      /* Once the press is cancelled by travel this touch is a
+         scroll drag: walk the book's container by the finger's
+         own delta (bundle 10 — see walkScrollBy). The walk is
+         preventDefaulted so a WebView that would ALSO scroll
+         natively cannot double the motion. */
+      if (dragWalk && (!press || press.cancelled)) {
+        var dy = dragWalk.y - t.clientY;
+        var now = Date.now();
+        var dt = Math.max(1, now - dragWalk.lastT);
+        dragWalk.y = t.clientY; dragWalk.lastT = now;
+        if (dy !== 0) {
+          dragWalk.v = dragWalk.v * 0.7 + (dy / dt) * 0.3;
+          if (walkScrollBy(dy)) {
+            dragWalk.walked = true;
+            if (ev.cancelable) ev.preventDefault();
+          }
+        }
+      }
     }
   }, { passive: false });
   target.addEventListener('touchend', function(ev){
+    var walked = dragWalk && dragWalk.walked ? dragWalk : null;
+    var walkV = walked ? dragWalk.v : 0;
+    dragWalk = null;
+    if (walked) {
+      /* This touch was a scroll, not a tap: stamp the guards so a
+         compatibility click trailing it (one can still arrive when
+         not every move was preventDefaulted) is read as its echo,
+         never as a page turn — the contract attachZoneDragScroll
+         kept via gestureTurnAt, kept here too. */
+      lastFireAt = Date.now(); lastFireKind = 'touch';
+      gestureTurnAt = Date.now();
+    }
     if (pinch) {
       if (ev.touches.length < 2) {
-        if (pinch.applied) saveFontPct();
+        if (pinch.applied) { saveFontPct(); scheduleViewAudit(); }
         pinch = null;
         lastTapHandledAt = Date.now();
       }
       if (press) { press.cancelled = true; disarm(press); press = null; }
       return;
     }
-    if (!press) return;
+    if (!press) {
+      /* A drag that began before this document had a press (or
+         whose press was consumed): if it was travelling, let it
+         glide out the way a native scroll would. */
+      if (walked && Math.abs(walkV) > 0.3) startScrollFling(walkV);
+      return;
+    }
     var st = press; press = null; disarm(st);
     if (st.longFired) { if (ev.cancelable) ev.preventDefault(); return; }
-    if (st.cancelled || Date.now() - st.t0 > TAP_MAX_MS) return;
-    lastTapHandledAt = Date.now();
-    if (handlers.onTap) handlers.onTap(st.targetEl);
+    if (st.cancelled) {
+      if (walked && Math.abs(walkV) > 0.3) startScrollFling(walkV);
+      return;
+    }
+    if (Date.now() - st.t0 > TAP_MAX_MS) return;
+    fireTap(st.targetEl, 'touch');
   });
   target.addEventListener('touchcancel', function(){
-    disarm(press); press = null; pinch = null;
+    disarm(press); press = null; pinch = null; dragWalk = null;
   });
   /* Mouse equivalents, so the gestures can be exercised on a desktop. */
   target.addEventListener('mousedown', function(ev){
@@ -520,17 +689,20 @@ function attachGestures(target, handlers){
     if (!press) return;
     var st = press; press = null; disarm(st);
     if (st.longFired || st.cancelled || Date.now() - st.t0 > TAP_MAX_MS) return;
-    lastTapHandledAt = Date.now();
-    if (handlers.onTap) handlers.onTap(st.targetEl);
+    /* Bundle 10: through fireTap — on a touch screen this mouseup
+       is usually the compatibility replay of a tap the touch path
+       already served, and fireTap's window keeps it from firing
+       a second time. A real mouse (no touch path) fires cleanly. */
+    fireTap(st.targetEl, 'mouse');
   });
   /* Click fallback: a tap whose touch sequence was interrupted
      mid-flight — the system reclaims touches when the bars show or
      hide — can still land as a click. If the paths above already
-     served this tap they stamped lastTapHandledAt, and this stays
-     out of the way; if they never saw it, this is the tap. */
+     served this tap, fireTap's window covers this too (bundle 10:
+     it keys off the same stamp); if they never saw it, this is
+     the tap. */
   target.addEventListener('click', function(ev){
-    if (Date.now() - lastTapHandledAt < 700) return;
-    if (handlers.onTap) handlers.onTap(ev.target);
+    fireTap(ev.target, 'click');
   });
 }
 
@@ -659,8 +831,11 @@ function setFullscreen(on){
        safe-area buffer in style.css), so once the transition
        settles, have epub.js re-measure the viewer against its
        new box rather than trusting a resize event to have
-       landed at the right moment. */
+       landed at the right moment. Bundle 10 adds the view-height
+       audit to the same settle: a re-measure is exactly when a
+       section box can come up short against its content. */
     if (cur.rendition) { try { cur.rendition.resize(); } catch (e) {} }
+    auditViewHeights();
     attachToLiveContents();
   }, 650);
 }
@@ -1297,6 +1472,76 @@ function turnPage(dir){
   if (dir > 0) c.scrollTop = Math.min(maxTop, Math.floor(top / step) * step + step);
   else c.scrollTop = Math.max(0, Math.ceil(top / step) * step - step);
 }
+
+/* ============ section-height audit (bundle 10) ==================
+   In the continuous stream each section lives in an epub.js view
+   whose box is sized ONCE, when the section loads, to the height
+   epub.js measures for its document. Content that grows after
+   that measurement — a picture that finishes loading, a font
+   that swaps in, the theme's font size applied a beat late —
+   spills past the bottom of its box, and the NEXT section is
+   laid out right where the box ends: the spilled lines and the
+   next section's first lines print over each other. That is the
+   "words overlapping each other" of Joshua's bundle-9 report
+   (2026-10-30). epub.js does listen for its contents' own resize
+   signals and re-expands a view when they fire, but whether they
+   fire is the engine's business; on his WebView the correction
+   evidently never arrived. So the reader now audits its live
+   views itself, with epub.js's OWN height formula (the max its
+   Contents.height() computes), and grows any view whose box is
+   shorter than its content — grow only, never shrink, so a view
+   epub.js already sized correctly is never touched. Growing a
+   box pushes the sections below it down the stream; overlap
+   becomes impossible by construction. The audit is cheap (a
+   handful of live views) and idempotent; it runs after a book
+   opens, after each section renders, after font-size changes,
+   after pictures load, and after full-screen settles. */
+function contentHeightOf(doc){
+  var de = doc.documentElement, b = doc.body;
+  if (!de || !b) return 0;
+  return Math.max(de.clientHeight, b.scrollHeight, de.scrollHeight,
+                  b.offsetHeight, de.offsetHeight);
+}
+function auditViewHeights(){
+  if (!cur.rendition || !cur.rendition.getContents) return;
+  try {
+    var list = cur.rendition.getContents() || [];
+    for (var i = 0; i < list.length; i++) {
+      var doc = list[i] && list[i].document;
+      if (!doc || !doc.defaultView) continue;
+      var frame = doc.defaultView.frameElement;
+      if (!frame) continue;
+      var need = contentHeightOf(doc);
+      if (need - frame.clientHeight > 2) {
+        frame.style.height = need + 'px';
+        if (frame.parentElement) frame.parentElement.style.height = need + 'px';
+      }
+    }
+  } catch (e) { /* an audit hiccup must never break reading */ }
+}
+var viewAuditT = null;
+function scheduleViewAudit(){
+  clearTimeout(viewAuditT);
+  viewAuditT = setTimeout(auditViewHeights, 350);
+}
+/* Opening a book makes the reader view visible and immediately
+   asks epub.js to build the stream; epub.js measures its stage
+   from the viewer at that moment. If the viewer has not been
+   laid out yet (a slow WebView's first frame after the shelf
+   hides), the stage comes up zero-sized or stale and the whole
+   stream is built on the wrong measure. Wait — briefly, and
+   never forever — for the viewer to have a real size first. */
+function waitForViewerSize(){
+  return new Promise(function(res){
+    var tries = 0;
+    (function poll(){
+      var v = $('viewer');
+      if (v && v.clientWidth > 0 && v.clientHeight > 0) return res();
+      if (++tries > 40) return res();
+      requestAnimationFrame(poll);
+    })();
+  });
+}
 attachGestures($('tapLeft'), {
   onTap: function(){ turnPage(-1); },
   onLongPress: function(){ toggleTTS(); }
@@ -1316,44 +1561,14 @@ $('tapRight').addEventListener('click', function(){
   if (Date.now() - gestureTurnAt < 600) return;
   turnPage(1);
 });
-/* Drag-scrolling from the tap zones (bundle 7): the zones are
-   plain overlay strips, so a vertical drag that STARTS on one
-   lands on the strip, not on the book's scrolling view beneath
-   it — without help, the outer 22% on each side would be dead
-   ground for scrolling. While one finger drags on a zone, walk
-   the book's scroll container by the same delta, so a scroll
-   drag works from anywhere on the screen, edges included. Taps
-   are untouched: under the gesture layer's own movement
-   threshold nothing here fires, and a drag that did scroll
-   stamps gestureTurnAt so the click fallback trailing it can
-   never also turn the page. */
-function attachZoneDragScroll(el){
-  var drag = null;
-  el.addEventListener('touchstart', function(ev){
-    drag = (ev.touches.length === 1)
-      ? { y: ev.touches[0].clientY, moved: false } : null;
-  }, { passive: true });
-  el.addEventListener('touchmove', function(ev){
-    if (!drag || ev.touches.length !== 1) return;
-    var y = ev.touches[0].clientY;
-    var dy = drag.y - y;
-    drag.y = y;
-    if (dy === 0) return;
-    drag.moved = true;
-    if (ev.cancelable) ev.preventDefault();
-    var c = cur.rendition && cur.rendition.manager &&
-            cur.rendition.manager.container;
-    if (c) c.scrollTop += dy;
-  }, { passive: false });
-  function endDrag(){
-    if (drag && drag.moved) gestureTurnAt = Date.now();
-    drag = null;
-  }
-  el.addEventListener('touchend', endDrag);
-  el.addEventListener('touchcancel', endDrag);
-}
-attachZoneDragScroll($('tapLeft'));
-attachZoneDragScroll($('tapRight'));
+/* Drag-scrolling from the tap zones (bundle 7) used to live
+   here as its own walker (attachZoneDragScroll): the zones are
+   overlay strips, so a drag starting on one never reached the
+   book's scrolling view beneath it. Bundle 10 folds that walker
+   into attachGestures itself (see the hand-walked scrolling
+   note there), which now walks the container for drags on the
+   zones AND on the page documents alike — one mechanism, one
+   set of guards, no dead ground anywhere on the screen. */
 
 /* add books */
 $('addBtn').addEventListener('click', function(){ $('fileInput').click(); });
@@ -1396,14 +1611,21 @@ var REPORT_ENTRIES = {
   device: 'entry.1017388942'
 };
 function readerVersionTag(){
-  var shell = '0.1.3', bundle = null;
+  /* Bundle 10: reports name the bundle whose code is RUNNING
+     (the constant in this file — see WEB_BUNDLE above), with
+     the shell's serving counter alongside when the two differ,
+     so a report can never again describe code that was not the
+     code in front of him. */
+  var shell = '0.1.3', serving = null;
   try {
     if (window.ReaderBridge) {
       if (ReaderBridge.shellVersionName) shell = ReaderBridge.shellVersionName();
-      if (ReaderBridge.webBundleVersion) bundle = ReaderBridge.webBundleVersion();
+      if (ReaderBridge.webBundleVersion) serving = ReaderBridge.webBundleVersion();
     }
   } catch (e) {}
-  return 'Reader shell ' + shell + ' · web bundle ' + (bundle || '?');
+  return 'Reader shell ' + shell + ' · web bundle ' + WEB_BUNDLE +
+    (serving != null && serving !== WEB_BUNDLE
+      ? ' (shell serving ' + serving + ')' : '');
 }
 function reportStore(key, fallback){
   try {
@@ -1704,21 +1926,38 @@ $('refreshFoldersBtn').addEventListener('click', function(){
    sha256, and applies a new bundle at the NEXT cold start — never
    mid-session, never unverified. The version line on the shelf
    says which bundle is running, so it can be reported. */
+/* The newest bundle the shell has told us about beyond the one
+   running: downloaded mid-session (pending the next cold start)
+   or — should the two ever diverge — the shell's serving
+   counter. updateVerLine keeps it on the shelf until the running
+   code catches up (bundle 10 truth-in-labelling: a toast fades
+   in four seconds, and bundle 9's was read as "the update is
+   in"; the shelf line does not fade). */
+var pendingBundle = 0;
 function updateVerLine(){
-  var shell = '0.1.3', bundle = null;
+  var shell = '0.1.3', serving = null;
   try {
     if (window.ReaderBridge) {
       if (ReaderBridge.shellVersionName) shell = ReaderBridge.shellVersionName();
-      if (ReaderBridge.webBundleVersion) bundle = ReaderBridge.webBundleVersion();
+      if (ReaderBridge.webBundleVersion) serving = ReaderBridge.webBundleVersion();
     }
   } catch (e) {}
-  $('verLine').textContent = 'Reader ' + shell +
-    (bundle ? ' · web bundle ' + bundle : '');
+  var line = 'Reader ' + shell + ' · web bundle ' + WEB_BUNDLE;
+  var newer = Math.max(serving || 0, pendingBundle || 0);
+  if (newer > WEB_BUNDLE)
+    line += ' · update ' + newer + ' ready — close and reopen the reader to use it';
+  $('verLine').textContent = line;
 }
 window.__updateCheckResult = function(status, version){
   if (status === 'current') {
+    /* Even a "current" answer teaches us the shell's serving
+       number; if it is somehow ahead of the running code, the
+       shelf line must say an update is waiting, not "up to
+       date" (bundle 10). */
+    if (version > WEB_BUNDLE) pendingBundle = version;
     toast('Your reader is up to date (web bundle ' + version + ').');
   } else if (status === 'updated') {
+    pendingBundle = version;
     toast('Update downloaded — web bundle ' + version +
           ' will be ready next time you open the reader.', 4200);
   } else if (status === 'needs-apk') {
