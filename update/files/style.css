@@ -157,6 +157,31 @@ body.fullscreen #readerChrome { display:none; }
 #syncPanel .toolbtn:disabled { opacity:.55; }
 .sync-found-item { display:block; width:100%; text-align:left; margin:4px 0; }
 
+/* ---------- added-books notice (bundle 8) ---------- */
+#addedNotice {
+  margin:0 8px 14px; padding:14px 16px 12px;
+  background:#fffaf0; color:#2a2118; border:2px solid #b98a45; border-radius:12px;
+  box-shadow:0 8px 20px rgba(0,0,0,.5);
+  font-size:15px; line-height:1.55;
+}
+#addedNoticeText { white-space:pre-line; }
+#addedNoticeOk { margin-top:10px; }
+
+/* ---------- fullscreen picture (bundle 8) ---------- */
+#pictureView { position:fixed; inset:0; z-index:65; background:#14110d; }
+#pictureScroll {
+  position:absolute; inset:0; overflow:auto; display:flex;
+  -webkit-overflow-scrolling:touch;
+}
+#pictureImg { margin:auto; max-width:100%; max-height:100%; }
+#pictureView.zoomed #pictureImg { max-width:none; max-height:none; }
+#pictureClose {
+  position:absolute; top:10px; right:10px; z-index:2;
+  width:52px; height:52px; border-radius:50%;
+  border:2px solid #f5e7c8; background:rgba(20,12,4,.85); color:#f5e7c8;
+  font-size:24px; line-height:1; font-family:inherit;
+}
+
 /* ---------- toast ---------- */
 #toast {
   position:fixed; left:50%; bottom:96px; transform:translateX(-50%); z-index:60;
