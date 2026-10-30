@@ -306,9 +306,10 @@ async function openBook(id){
      mode nothing on the page is a scrollable surface. Scrolled
      flow + the continuous manager lays the sections out in one
      tall, vertically scrolling view: a drag scrolls the text,
-     next()/prev() (edge tap zones, the read-aloud page chase)
-     step one screenful at a time, and rotation simply reflows
-     the same scrolling view. */
+     the edge tap zones step the same scroll one screenful at a
+     time (bundle 9 — see turnPage for why they no longer call
+     next()/prev()), and rotation simply reflows the same
+     scrolling view. */
   var rendition = book.renderTo('viewer', {
     width: '100%', height: '100%', flow: 'scrolled',
     manager: 'continuous', spread: 'none'
@@ -316,9 +317,16 @@ async function openBook(id){
   cur.rendition = rendition;
   rendition.themes.default({
     /* user-select off: a long-press on the page means "read aloud"
-       (Joshua's gesture), never text selection. */
+       (Joshua's gesture), never text selection.
+       Vertical body margins zeroed (bundle 9): in the continuous
+       stream each section is its own document, and a section's
+       own top/bottom margins would stack into a visible gap at
+       every chapter seam. Zeroed, the sections butt together and
+       the book reads as the one stream it is; the book's side
+       margins are left exactly as the book sets them. */
     'body': { 'font-family': 'Georgia, serif', 'line-height': '1.55',
               'color': '#26221c', 'background': '#f7f1e3',
+              'margin-top': '0', 'margin-bottom': '0',
               '-webkit-user-select': 'none', 'user-select': 'none',
               '-webkit-touch-callout': 'none' },
     'p': { 'margin': '0 0 0.9em 0' }
@@ -647,6 +655,12 @@ function setFullscreen(on){
     if (window.ReaderBridge && ReaderBridge.setFullscreen) {
       try { ReaderBridge.setFullscreen(isFullscreen); } catch (e) {}
     }
+    /* Bundle 9: full screen also insets the viewer itself (the
+       safe-area buffer in style.css), so once the transition
+       settles, have epub.js re-measure the viewer against its
+       new box rather than trusting a resize event to have
+       landed at the right moment. */
+    if (cur.rendition) { try { cur.rendition.resize(); } catch (e) {} }
     attachToLiveContents();
   }, 650);
 }
@@ -1229,10 +1243,59 @@ $('ttsStopBtn').addEventListener('click', function(){ toggleTTS(); });
 
 /* reader controls */
 $('backBtn').addEventListener('click', function(){ closeBook(false); });
+/* Edge tap zones — one-screenful steps along the stream
+   (bundle 9 — Joshua's hands-on report, 2026-10-30, reading the
+   Tailscale book): the zones used to call rendition.next() /
+   prev(), but in scrolled flow those are SECTION steps, not
+   screenfuls. One NEXT tap in chapter 1 landed him at the end
+   of chapter 1; PREVIOUS took him back to the table of contents;
+   the pair after that landed mid-content and at a chapter start
+   with no pattern to it. The paragraphs he had felt were
+   "missing" were never missing — the taps were stepping over
+   them.
+   His model, and now the behaviour: the book is ONE CONTINUOUS
+   STREAM. A tap is a step through that stream — the book's own
+   scroll container (the same one the bundle 7 zone drag-scroll
+   walks) moves by exactly one screenful: the viewport height,
+   minus about a line and a half of overlap so no line is ever
+   swallowed whole between steps and the eye keeps its place —
+   forward and backward by the same amount, so repeated taps in
+   either direction land on the same screenfuls. A tap can never
+   change section by itself: at a chapter's end a tap shows the
+   partial screen that remains, and the next tap carries across
+   the seam, exactly as drag-scrolling across it does; tap and
+   drag are the same motion in the same stream, both directions.
+   scrollTop clamps itself at the very start and end of the
+   book, so an edge tap there simply goes nowhere instead of
+   leaping to the contents or anywhere else. And because the
+   step is a real scroll, the relocated handler keeps saving
+   the true place, and read-aloud started afterwards takes its
+   sentences from what is actually on screen. */
+function scrollContainer(){
+  return (cur.rendition && cur.rendition.manager &&
+          cur.rendition.manager.container) || null;
+}
 function turnPage(dir){
   if (!cur.rendition) return;
   gestureTurnAt = Date.now();
-  if (dir < 0) cur.rendition.prev(); else cur.rendition.next();
+  var c = scrollContainer();
+  if (!c || !c.clientHeight) return;
+  /* One line of the text as currently sized: 16px base font ×
+     the current text size × the theme's 1.55 line-height. The
+     step leaves ~1.5 lines of overlap with the screen just read. */
+  var linePx = 16 * (cur.fontPct / 100) * 1.55;
+  var step = Math.max(60, Math.floor(c.clientHeight - linePx * 1.5));
+  /* Steps are laid on a ladder of screenfuls measured from the
+     top of the book, not from wherever the scroll happens to
+     sit: a tap moves to the next rung in its direction (the
+     last rung is the end of the book itself). NEXT and PREV
+     therefore land on exactly the same screenfuls — including
+     after a drag left the scroll between rungs, and after the
+     final forward tap had to clamp short at the book's end. */
+  var top = c.scrollTop;
+  var maxTop = Math.max(0, c.scrollHeight - c.clientHeight);
+  if (dir > 0) c.scrollTop = Math.min(maxTop, Math.floor(top / step) * step + step);
+  else c.scrollTop = Math.max(0, Math.ceil(top / step) * step - step);
 }
 attachGestures($('tapLeft'), {
   onTap: function(){ turnPage(-1); },
@@ -1247,11 +1310,11 @@ attachGestures($('tapRight'), {
    never turns the page twice. */
 $('tapLeft').addEventListener('click', function(){
   if (Date.now() - gestureTurnAt < 600) return;
-  if (cur.rendition) cur.rendition.prev();
+  turnPage(-1);
 });
 $('tapRight').addEventListener('click', function(){
   if (Date.now() - gestureTurnAt < 600) return;
-  if (cur.rendition) cur.rendition.next();
+  turnPage(1);
 });
 /* Drag-scrolling from the tap zones (bundle 7): the zones are
    plain overlay strips, so a vertical drag that STARTS on one
