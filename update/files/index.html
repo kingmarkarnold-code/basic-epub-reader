@@ -27,6 +27,11 @@
     <button id="addFolderBtn" class="toolbtn">Add folder</button>
     <button id="refreshFoldersBtn" class="toolbtn">Refresh folders</button>
     <button id="updateBtn" class="toolbtn">Check for updates</button>
+    <!-- Diagnostics (bundle 11): the scroll measurement panel.
+         The reader measures its own scroll path on this phone
+         (see app.js, scroll diagnostics) — this button shows
+         what it found and can send the report home on demand. -->
+    <button id="diagBtn" class="toolbtn">Diagnostics</button>
   </div>
   <div id="shelfScroll">
     <!-- Added-books notice (bundle 8 — Joshua, 2026-10-30): when a
@@ -106,6 +111,21 @@
   <div id="importBar"><i id="importFill"></i></div>
   <div id="importText"></div>
   <button id="importOk" class="barbtn hidden">OK</button>
+</div>
+
+<!-- ================= SCROLL DIAGNOSTICS (bundle 11) =================
+     Shows the reader's own scroll measurement: the values are
+     measured on this phone, kept from the last book open, and
+     can be sent home with the Send button. Text is selectable
+     so it can be read aloud or copied exactly. -->
+<div id="diagPanel" class="hidden">
+  <div class="diag-card">
+    <div class="sync-head"><div class="sync-title">Reader diagnostics</div></div>
+    <div id="diagText">Measuring…</div>
+    <button id="diagRefresh" class="toolbtn">Measure again</button>
+    <button id="diagSend" class="toolbtn">Send report</button>
+    <button id="diagClose" class="toolbtn">Close</button>
+  </div>
 </div>
 
 <div id="toast" class="hidden"></div>
