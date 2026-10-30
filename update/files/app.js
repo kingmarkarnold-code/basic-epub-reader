@@ -125,6 +125,20 @@ async function findByKey(key){
 
 /* Returns { status: 'added' | 'dupe', rec } — throws when the file
    cannot be parsed as a book at all. */
+/* epub.js's ready promise can hang FOREVER on a damaged file
+   (proven in the bundle-8 harness: a few garbage bytes never
+   settle it). An unguarded await would wedge a whole folder
+   scan on one corrupt book — no finish, no notice, no report:
+   exactly the silent failure bundle 8 exists to eliminate. A
+   real book parses in a second or two even on the TCL, so 30 s
+   is a generous ceiling, not a target. */
+function readyWithTimeout(book){
+  return Promise.race([book.ready, new Promise(function(_, reject){
+    setTimeout(function(){
+      reject(new Error('Book could not be read (parse timed out)'));
+    }, 30000);
+  })]);
+}
 async function importBook(arrayBuffer, quiet){
   var key = await contentKey(arrayBuffer);
   var dupe = await findByKey(key);
@@ -133,7 +147,7 @@ async function importBook(arrayBuffer, quiet){
     return { status: 'dupe', rec: dupe };
   }
   var book = ePub(arrayBuffer);
-  await book.ready;
+  await readyWithTimeout(book);
   var meta = {};
   try { meta = await book.loaded.metadata; } catch (e) {}
   var title = (meta && meta.title) || 'Untitled book';
@@ -278,9 +292,10 @@ async function openBook(id){
   cur.fontPct = loadFontPct();
   setReaderOpen(true);
 
-  var book = ePub(rec.data.slice(0));
-  cur.book = book;
-  await book.ready;
+  try {
+    var book = ePub(rec.data.slice(0));
+    cur.book = book;
+    await readyWithTimeout(book);
   /* Reading flow (bundle 7 — Joshua's hands-on report, 2026-10-30):
      the book SCROLLS. Under flow 'paginated' epub.js clips every
      page to exactly the screen and lays the text out in columns
@@ -317,6 +332,7 @@ async function openBook(id){
     var doc = contents.document;
     if (!doc) return;
     attachFootnotePopups(doc);
+    attachPictureTaps(doc);
     /* Reading gestures live INSIDE the page: epub.js renders each
        page in an iframe whose touches never reach the outer page,
        so every section document gets its own gesture handlers.
@@ -356,9 +372,19 @@ async function openBook(id){
   await rendition.display(saved.cfi || undefined);
   attachToLiveContents();
   try { rendition.on('rendered', function(){ attachToLiveContents(); }); } catch (e) {}
-  book.locations.generate(1024).catch(function(){});
+    book.locations.generate(1024).catch(function(){});
+  } catch (err) {
+    /* A book that will not open reports home (bundle 8) and the
+       reader falls back to the shelf instead of a blank page. */
+    reportError('Opening a book', '"' + (rec.title || 'A book') + '" would not open: ' +
+      (err && err.message ? err.message : String(err)));
+    toast('Could not open that book.');
+    closeBook(false);
+    return;
+  }
 }
 function closeBook(silent){
+  if (picture.open) { picture.open = false; $('pictureView').classList.add('hidden'); }
   stopTTS();
   if (isFullscreen) setFullscreen(false);
   if (cur.rendition) { try { cur.rendition.destroy(); } catch (e) {} cur.rendition = null; }
@@ -372,7 +398,10 @@ function closeBook(silent){
     renderShelf();
   }
 }
-window.__closeReader = function(){ closeBook(false); };
+window.__closeReader = function(){
+  if (picture.open) { closePicture(); return; }   /* Back closes an open picture first */
+  closeBook(false);
+};
 
 /* footnote card */
 function showFootnote(text){
@@ -562,6 +591,8 @@ function pageGestureHandlers(){
         lastFootnoteDismissAt = Date.now();   // the click trailing this tap must not open a note either
         return;
       }
+      var pic = pictureTargetOf(el);
+      if (pic) { openPicture(pic); return; }   // a picture tap opens the picture — outranks any link wrapped around it
       var a = null;
       try { a = el && el.closest ? el.closest('a') : null; } catch (e) {}
       if (a) return;   // links/footnotes keep their own behaviour
@@ -619,7 +650,144 @@ function setFullscreen(on){
     attachToLiveContents();
   }, 650);
 }
-window.__exitFullscreen = function(){ if (isFullscreen) setFullscreen(false); };
+window.__exitFullscreen = function(){
+  if (picture.open) { closePicture(); return; }   /* Back closes an open picture first */
+  if (isFullscreen) setFullscreen(false);
+};
+
+/* ================= fullscreen picture (bundle 8) =================
+   Tapping a picture in the book opens it on its own screen: fitted
+   so the whole picture is visible, scrollable/pannable so every
+   part is reachable on the small screen, one tap zooms it to
+   natural size (tap again zooms back out), and it closes via the
+   X in the top-right corner, a plain tap on the fitted picture,
+   or Android Back. The rendition underneath is never touched, so
+   closing returns to the exact reading position. Opening enters
+   fullscreen when not already there, which is also what routes
+   Android Back to closePicture (via __exitFullscreen above). */
+var picture = { open: false, fsBefore: false, url: null, tapTimer: null, lastTouchEndAt: 0 };
+function pictureTargetOf(el){
+  var node = el;
+  for (var depth = 0; node && depth < 5; depth++) {
+    var tag = (node.tagName || '').toLowerCase();
+    if (tag === 'img') {
+      var src = node.currentSrc || node.getAttribute('src');
+      if (!src) return null;
+      if (!/^(blob:|data:|https?:)/.test(src) && node.ownerDocument) {
+        try { src = new URL(src, node.ownerDocument.baseURI).href; } catch (e) { /* keep raw */ }
+      }
+      return src;
+    }
+    if (tag === 'image') {
+      var href = node.getAttribute('href') ||
+        (node.getAttributeNS && node.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
+      if (href) return href;
+    }
+    if (tag === 'svg') {
+      var inner = node.querySelector && node.querySelector('image');
+      if (inner) {
+        var ih = inner.getAttribute('href') ||
+          (inner.getAttributeNS && inner.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
+        if (ih) return ih;
+      }
+      try {
+        return URL.createObjectURL(new Blob(
+          [new XMLSerializer().serializeToString(node)], { type: 'image/svg+xml' }));
+      } catch (e) { return null; }
+    }
+    node = node.parentElement || node.parentNode;
+  }
+  return null;
+}
+function openPicture(src){
+  if (!src || picture.open) return;
+  if (src.indexOf('blob:') === 0 || src.indexOf('data:') === 0) { showPicture(src); return; }
+  fetch(src).then(function(r){ return r.blob(); }).then(function(b){
+    showPicture(URL.createObjectURL(b));
+  }).catch(function(){ showPicture(src); });
+}
+function showPicture(url){
+  if (picture.url && picture.url !== url && picture.url.indexOf('blob:') === 0)
+    URL.revokeObjectURL(picture.url);
+  picture.url = url;
+  picture.fsBefore = isFullscreen;
+  picture.open = true;
+  var view = $('pictureView'), sc = $('pictureScroll');
+  view.classList.remove('zoomed');
+  $('pictureImg').src = url;
+  sc.scrollLeft = 0; sc.scrollTop = 0;
+  view.classList.remove('hidden');   /* .hidden is display:none !important — the class is the switch, as everywhere else in this app */
+  if (!isFullscreen) setFullscreen(true);
+}
+function closePicture(){
+  if (!picture.open) return;
+  picture.open = false;
+  if (picture.tapTimer) { clearTimeout(picture.tapTimer); picture.tapTimer = null; }
+  $('pictureView').classList.add('hidden');
+  if (picture.url && picture.url.indexOf('blob:') === 0) {
+    URL.revokeObjectURL(picture.url);
+    picture.url = null;
+  }
+  if (isFullscreen !== picture.fsBefore) setFullscreen(picture.fsBefore);
+}
+function togglePictureZoom(){
+  $('pictureView').classList.toggle('zoomed');
+  var sc = $('pictureScroll');
+  sc.scrollLeft = 0; sc.scrollTop = 0;
+}
+function pictureTap(){
+  if (picture.tapTimer) {   /* second tap right behind the first: zoom, don't close */
+    clearTimeout(picture.tapTimer);
+    picture.tapTimer = null;
+    togglePictureZoom();
+    return;
+  }
+  picture.tapTimer = setTimeout(function(){
+    picture.tapTimer = null;
+    closePicture();
+  }, 360);
+}
+(function(){
+  var sc = $('pictureScroll');
+  var downX = 0, downY = 0, moved = false;
+  sc.addEventListener('touchstart', function(e){
+    var t = e.touches[0];
+    downX = t.clientX; downY = t.clientY; moved = false;
+  }, { passive: true });
+  sc.addEventListener('touchmove', function(e){
+    var t = e.touches[0];
+    if (Math.abs(t.clientX - downX) > 14 || Math.abs(t.clientY - downY) > 14) moved = true;
+  }, { passive: true });
+  sc.addEventListener('touchend', function(){
+    picture.lastTouchEndAt = Date.now();
+    if (!moved) pictureTap();   /* drags pan natively and never close */
+  });
+  sc.addEventListener('click', function(){
+    if (Date.now() - picture.lastTouchEndAt < 700) return;  /* compatibility click after a touch */
+    pictureTap();
+  });
+})();
+$('pictureClose').addEventListener('click', function(e){
+  e.stopPropagation();
+  closePicture();
+});
+/* Capture-phase click backstop inside each page document: a tap
+   on a picture whose touch path was interrupted still opens the
+   picture here, and a picture wrapped in a link opens the picture
+   instead of navigating the book out from under the reader. */
+function attachPictureTaps(doc){
+  if (doc.__berPictureTaps) return;
+  doc.__berPictureTaps = true;
+  doc.addEventListener('click', function(ev){
+    var pic = ev.target ? pictureTargetOf(ev.target) : null;
+    if (!pic) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (picture.open) return;
+    if (Date.now() - lastFootnoteDismissAt < 800) return;  /* that tap only dismissed a note */
+    openPicture(pic);
+  }, true);
+}
 
 /* ================= read-aloud (text-to-speech) ===================
    Long-press starts reading FROM THE TOP OF THE CURRENT PAGE,
@@ -1134,10 +1302,126 @@ $('fileInput').addEventListener('change', async function(ev){
       var ab = await files[i].arrayBuffer();
       await importBook(ab);
     } catch (e) {
+      reportError('Adding a book', '"' + (files[i].name || 'that file') +
+        '" could not be added from the file picker: ' +
+        (e && e.message ? e.message : String(e)));
       toast('Could not open: ' + (files[i].name || 'that file'));
     }
   }
   renderShelf();
+});
+
+/* ================= error reporting (bundle 8) =================
+   Silent, automatic error reports to the SAME Player Reports
+   inbox the game and the suite editors use (Joshua, 2026-10-30 —
+   his editor reporting rule, extended to the reader). A failure
+   that is silent to him is never silent to Mollie: a folder scan
+   that cannot reach a folder, files that arrive unreadable, a
+   book that will not open, session errors — each becomes one
+   "Reader Report" response in that form, sent as an ordinary
+   form POST (the field codes are the form's own, shared with
+   the game's config). Discipline, matching the editors: a
+   distinct failure reports ONCE (a signature set remembers what
+   has gone; it re-arms when the shell or bundle version
+   changes); reports queue on the phone while offline and drain
+   on a later launch; the reporter failing is never itself
+   reported, and nothing here ever pops anything up at him. */
+var REPORT_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSeLwZKjsqKoCRVIuedhSD5NXJFO_WkwJtG7ExjXjCV6seakMg/formResponse';
+var REPORT_ENTRIES = {
+  type: 'entry.245308779', message: 'entry.722588258',
+  version: 'entry.1808724204', where: 'entry.613460102',
+  device: 'entry.1017388942'
+};
+function readerVersionTag(){
+  var shell = '0.1.3', bundle = null;
+  try {
+    if (window.ReaderBridge) {
+      if (ReaderBridge.shellVersionName) shell = ReaderBridge.shellVersionName();
+      if (ReaderBridge.webBundleVersion) bundle = ReaderBridge.webBundleVersion();
+    }
+  } catch (e) {}
+  return 'Reader shell ' + shell + ' · web bundle ' + (bundle || '?');
+}
+function reportStore(key, fallback){
+  try {
+    var v = JSON.parse(localStorage.getItem(key) || 'null');
+    return v == null ? fallback : v;
+  } catch (e) { return fallback; }
+}
+function reportSave(key, val){
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+}
+var reportSending = false;
+function flushReports(){
+  if (reportSending) return;
+  var queue = reportStore('ber-report-queue', []);
+  if (!queue.length) return;
+  var item = queue[0];
+  reportSending = true;
+  var body = new URLSearchParams();
+  body.set(REPORT_ENTRIES.type, 'Reader Report');
+  body.set(REPORT_ENTRIES.message, item.message);
+  body.set(REPORT_ENTRIES.version, item.version);
+  body.set(REPORT_ENTRIES.where, item.where);
+  body.set(REPORT_ENTRIES.device, item.device);
+  fetch(REPORT_FORM_URL, { method: 'POST', mode: 'no-cors',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString()
+  }).then(function(){
+    /* The form answers opaquely (no-cors): a resolved fetch is
+       "sent". Record the signature, drop the item, send the next. */
+    var sent = reportStore('ber-report-sent', {});
+    sent[item.sig] = Date.now();
+    reportSave('ber-report-sent', sent);
+    var q = reportStore('ber-report-queue', []);
+    q = q.filter(function(x){ return x.sig !== item.sig; });
+    reportSave('ber-report-queue', q);
+    reportSending = false;
+    flushReports();
+  }).catch(function(){
+    /* Offline or unreachable: the queue keeps the report for a
+       later launch. Never itself worth a report. */
+    reportSending = false;
+  });
+}
+function reportError(where, message){
+  try {
+    var tag = readerVersionTag();
+    var marker = reportStore('ber-report-armed', '');
+    var sent = reportStore('ber-report-sent', {});
+    if (marker !== tag) {
+      sent = {};
+      reportSave('ber-report-armed', tag);
+      reportSave('ber-report-sent', sent);
+    }
+    var sig = (where + '|' + String(message).split('\n')[0]).slice(0, 180);
+    if (sent[sig]) return;
+    var queue = reportStore('ber-report-queue', []);
+    for (var i = 0; i < queue.length; i++) if (queue[i].sig === sig) return;
+    queue.push({ sig: sig, where: where,
+      message: String(message).slice(0, 1500), version: tag,
+      device: String(navigator.userAgent || '').slice(0, 300),
+      ts: Date.now() });
+    while (queue.length > 20) queue.shift();
+    reportSave('ber-report-queue', queue);
+    flushReports();
+  } catch (e) { /* reporting must never break the reader */ }
+}
+/* Session errors ride the same pipe, capped so a looping fault
+   can never flood the inbox. */
+var sessionReports = 0;
+window.addEventListener('error', function(ev){
+  if (sessionReports >= 5) return;
+  sessionReports++;
+  reportError('Session', 'Page error: ' +
+    (ev && ev.message ? ev.message : 'unknown'));
+});
+window.addEventListener('unhandledrejection', function(ev){
+  if (sessionReports >= 5) return;
+  sessionReports++;
+  var r = ev && ev.reason;
+  reportError('Session', 'Unhandled rejection: ' +
+    String(r && r.message ? r.message : r).slice(0, 300));
 });
 
 /* ================= folder import (Joshua, 2026-10-28) ==========
@@ -1154,13 +1438,24 @@ var fimp = null;
    reopen the reader it will automatically check that folder for
    new files"). __folderScanStart consumes it; __folderBusy clears
    it if the shell turns the start away. An auto scan is QUIET: no
-   progress overlay, no summary dialog — a single self-dismissing
-   toast, and only when new books actually arrived. The manual
-   Refresh keeps the full progress + summary behaviour. */
+   progress overlay, no summary dialog. Bundle 8 (Joshua,
+   2026-10-30) overrides bundle 2's "silence is the success
+   state": when an auto scan adds books, the shelf shows the
+   added-books notice naming them (see showAddedNotice); when it
+   FAILS — a folder it cannot reach, files it cannot read — the
+   failure reports home instead of vanishing (see the reporting
+   section). The manual Refresh keeps the full progress +
+   summary behaviour, and its summary names the added books too. */
 var pendingScanQuiet = false;
+/* Set alongside pendingScanQuiet for exactly the automatic
+   check's own start attempts (bundle 8), so __folderScanStart
+   can tell the retry loop "a scan truly started" and
+   __folderBusy can tell "the refused start was the auto one". */
+var pendingAutoCheck = false;
 function folderReset(kind, total, quiet){
   fimp = { kind: kind, total: total || 0, received: 0, processed: 0,
            added: 0, dupe: 0, bad: 0, ended: false, inaccessible: 0,
+           addedTitles: [], badNames: [],
            chain: Promise.resolve(), finished: false, quiet: !!quiet };
 }
 function folderProgress(){
@@ -1173,26 +1468,70 @@ function folderProgress(){
   $('importOk').classList.add('hidden');
   $('importOverlay').classList.remove('hidden');
 }
+/* The added-books notice (bundle 8 — Joshua, 2026-10-30):
+   "so many books have been added — [title] is now part of your
+   library." In-flow at the top of the shelf, naming every added
+   title; OK dismisses it; it never blocks the shelf and it is
+   never shown when nothing was added. */
+var noticeTitles = [];
+function showAddedNotice(titles){
+  if (!titles || !titles.length) return;
+  for (var i = 0; i < titles.length; i++)
+    if (noticeTitles.indexOf(titles[i]) < 0) noticeTitles.push(titles[i]);
+  var lines = [];
+  if (noticeTitles.length === 1) {
+    lines.push('A new book has been added — “' + noticeTitles[0] +
+               '” is now part of your library.');
+  } else {
+    lines.push(noticeTitles.length + ' new books have been added to your library:');
+    for (var j = 0; j < noticeTitles.length; j++)
+      lines.push('“' + noticeTitles[j] + '”');
+  }
+  $('addedNoticeText').textContent = lines.join('\n');
+  $('addedNotice').classList.remove('hidden');
+}
+$('addedNoticeOk').addEventListener('click', function(){
+  $('addedNotice').classList.add('hidden');
+  noticeTitles = [];
+});
 function folderMaybeFinish(){
   if (!fimp || fimp.finished) return;
   if (!fimp.ended || fimp.processed < fimp.received) return;
   fimp.finished = true;
-  if (fimp.quiet) {
-    /* Auto-check: silence is the success state. Unreadable files
-       and unreachable folders are counted here and surfaced only
-       on a manual Refresh; new books get one gentle toast. */
-    if (fimp.added > 0) {
-      renderShelf();
-      toast(fimp.added + (fimp.added === 1 ? ' new book' : ' new books') +
-            ' added from your folder', 3600);
-    }
-    return;
-  }
   /* Failed = files the shell found but that never became books:
      ones it could not read, plus ones that arrived unparseable. */
   var failed = fimp.total - fimp.added - fimp.dupe;
+  /* Bundle 8: scan failures report home from BOTH paths. A scan
+     that could not reach a folder, or files that arrived
+     unreadable, is precisely the "the reader silently did
+     nothing" Joshua reported — under the reporting rule it is
+     never silent to Mollie, even when it stays quiet to him. */
+  var scanKind = 'Folder scan (' + (fimp.quiet ? 'automatic' : 'manual') + ')';
+  if (fimp.inaccessible > 0)
+    reportError(scanKind,
+      fimp.inaccessible + ' remembered folder(s) could not be reached — ' +
+      'the folder permission may be gone. The scan found ' + fimp.total +
+      ' file(s) and added ' + fimp.added + '.');
+  if (failed > 0)
+    reportError(scanKind,
+      failed + ' file(s) could not be read as books' +
+      (fimp.badNames.length ? ': ' + fimp.badNames.join(', ') : '') +
+      '. The scan added ' + fimp.added + ' of ' + fimp.total + '.');
+  if (fimp.quiet) {
+    /* Auto-check: the added-books notice is the announcement
+       (bundle 8 ruling above); nothing added = stay quiet. */
+    if (fimp.added > 0) {
+      renderShelf();
+      showAddedNotice(fimp.addedTitles);
+    }
+    return;
+  }
   var lines = [];
   lines.push('Added ' + fimp.added + ' new book' + (fimp.added === 1 ? '' : 's') + '.');
+  if (fimp.addedTitles.length)
+    lines.push(fimp.addedTitles.map(function(t){ return '“' + t + '”'; }).join(', ') +
+               (fimp.addedTitles.length === 1 ? ' is' : ' are') +
+               ' now part of your library.');
   if (fimp.dupe > 0)
     lines.push(fimp.dupe + (fimp.dupe === 1 ? ' was' : ' were') + ' already on your shelf.');
   if (failed > 0)
@@ -1215,6 +1554,13 @@ function folderMaybeFinish(){
 window.__folderScanStart = function(kind, total){
   var quiet = (kind === 'rescan' && pendingScanQuiet);
   pendingScanQuiet = false;
+  if (pendingAutoCheck) {
+    /* A scan truly started: the auto-check's retry loop stands
+       down for this launch (bundle 8). */
+    pendingAutoCheck = false;
+    autoCheck.started = true;
+    autoCheck.done = true;
+  }
   folderReset(kind, total, quiet);
   folderProgress();
 };
@@ -1227,9 +1573,11 @@ window.__folderBook = function(name, b64){
   fimp.chain = fimp.chain.then(async function(){
     try {
       var r = await importBook(b64ToArrayBuffer(b64), true);
-      if (r.status === 'added') fimp.added++; else fimp.dupe++;
+      if (r.status === 'added') { fimp.added++; fimp.addedTitles.push(r.rec.title); }
+      else fimp.dupe++;
     } catch (e) {
       fimp.bad++;
+      fimp.badNames.push(name);
     }
     fimp.processed++;
     if (!fimp.finished) folderProgress();
@@ -1243,14 +1591,27 @@ window.__folderScanEnd = function(kind, inaccessible){
   folderMaybeFinish();
 };
 window.__folderBusy = function(){
-  /* The shell refused to start a scan because one is running. If
-     the refused start was the automatic open-check, stay silent —
-     and clear the flag, so the next manual scan is never mistaken
-     for an automatic one. */
+  /* The shell refused to start a scan because one is running.
+     Bundle 8: if the refused start was the automatic open-check,
+     that refusal used to END the launch's only attempt, silently.
+     Now it reports home and the check retries once the running
+     scan has had time to finish. A refused quiet start that was
+     not the auto-check's just clears the flag as before, so the
+     next manual scan is never mistaken for an automatic one. */
+  if (pendingAutoCheck) {
+    pendingAutoCheck = false;
+    pendingScanQuiet = false;
+    reportError('Folder check (automatic)',
+      'The automatic folder check was turned away: another scan was already running.');
+    scheduleAutoRetry();
+    return;
+  }
   if (pendingScanQuiet) { pendingScanQuiet = false; return; }
   toast('A folder is already being added — one at a time.');
 };
 window.__folderPickFailed = function(){
+  reportError('Folder picker',
+    'The system folder picker could not be opened on this phone.');
   toast("Couldn't open the folder picker on this phone.");
 };
 $('importOk').addEventListener('click', function(){
@@ -1318,21 +1679,48 @@ $('updateBtn').addEventListener('click', function(){
    Refresh stays for asking out loud, but he should never have to.
    Once per cold start, after the shelf has painted (never blocking
    first paint), through the same bridge pipe the Refresh uses;
-   the scan runs quiet (see pendingScanQuiet above). Guards: the
-   run-once flag, no folders remembered = nothing to do, and a scan
-   already in progress is never re-entered. */
-var autoFolderCheckDone = false;
+   the scan runs quiet (see pendingScanQuiet above).
+
+   Bundle 8 (2026-10-30) — why it could silently never happen,
+   diagnosed after his report that a new book in the folder did
+   not shelve on open: the check was ONE shot, and its run-once
+   flag was spent BEFORE anything succeeded, so a turned-away
+   start (shell busy), a bridge hiccup, or a throw anywhere in
+   the attempt ended the launch's only try — and even when the
+   scan ran, its failures (a folder it could not reach, a file
+   it could not read) were counted in the quiet finish and
+   dropped. The check now RETRIES until a scan actually starts
+   (__folderScanStart marks it), a busy refusal retries too, the
+   only terminal answer is "no folders remembered", and scan
+   failures report home from folderMaybeFinish. */
+var autoCheck = { tries: 0, started: false, done: false };
+var autoRetryT = null;
+function scheduleAutoRetry(){
+  if (autoCheck.done || autoCheck.started) return;
+  if (autoCheck.tries >= 6) return;
+  clearTimeout(autoRetryT);
+  autoRetryT = setTimeout(maybeAutoFolderCheck, 2500);
+}
 function maybeAutoFolderCheck(){
-  if (autoFolderCheckDone) return;
-  autoFolderCheckDone = true;
-  if (!(window.ReaderBridge && ReaderBridge.rescanFolders)) return;
-  var n = 0;
-  try { n = ReaderBridge.folderCount ? ReaderBridge.folderCount() : 0; } catch (e) {}
-  if (!n) return;
-  if (fimp && !fimp.finished) return;
+  if (autoCheck.done || autoCheck.started) return;
+  autoCheck.tries++;
+  if (!(window.ReaderBridge && ReaderBridge.rescanFolders)) {
+    scheduleAutoRetry();   // the bridge can lag the page; don't spend the launch on it
+    return;
+  }
+  var n = -1;
+  try { n = ReaderBridge.folderCount ? ReaderBridge.folderCount() : -1; } catch (e) {}
+  if (n < 0) { scheduleAutoRetry(); return; }
+  if (n === 0) { autoCheck.done = true; return; }   // genuinely nothing remembered
+  if (fimp && !fimp.finished) { scheduleAutoRetry(); return; }
   pendingScanQuiet = true;
+  pendingAutoCheck = true;
   try { ReaderBridge.rescanFolders(); }
-  catch (e) { pendingScanQuiet = false; }
+  catch (e) {
+    pendingScanQuiet = false;
+    pendingAutoCheck = false;
+    scheduleAutoRetry();
+  }
 }
 
 /* ---------------- boot ---------------- */
@@ -1341,6 +1729,8 @@ function maybeAutoFolderCheck(){
     await openDB();
     library = await idbAll();
   } catch (e) {
+    reportError('Storage', 'The library database would not open: ' +
+      (e && e.message ? e.message : String(e)));
     toast('Storage is unavailable on this phone — books will not persist.', 5000);
     library = [];
   }
@@ -1353,4 +1743,5 @@ function maybeAutoFolderCheck(){
   renderShelf();
   updateVerLine();
   setTimeout(maybeAutoFolderCheck, 900);
+  setTimeout(flushReports, 1600);   /* drain any reports queued offline */
 })();
