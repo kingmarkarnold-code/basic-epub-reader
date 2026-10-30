@@ -4,7 +4,7 @@
    the original file on the phone / in Drive is never touched. */
 'use strict';
 
-/* The web bundle THIS code belongs to (bundle 11). The number
+/* The web bundle THIS code belongs to (bundle 12). The number
    travels inside app.js itself, so the version the shelf footer
    shows is the version of the code actually running — the two
    can never disagree. Bundle 9's footer instead asked the shell
@@ -22,14 +22,59 @@
    section): it changes no reading behaviour — it measures the
    scroll path on the device itself, because bundle 10's scroll
    rework still did not scroll in Joshua's hands on his TCL
-   while the same code scrolled in desktop Chromium. */
-var WEB_BUNDLE = 11;
+   while the same code scrolled in desktop Chromium.
+   Bundle 12 (2026-10-30, later) — built from what bundle 11's
+   evening actually proved, all of it re-checked from source:
+   (1) His phone WAS serving bundle 11's page as well as its
+   script — the footer string on his shelf can only be written
+   by code that runs after every page-element binding, so the
+   Diagnostics button existed in his page all along, one small
+   button in a wrapping toolbar while everyone looked for a
+   diagnostics SECTION. Bundle 12 makes it unmissable anyway:
+   a full-width diagnostics bar on the shelf, injected by this
+   script whenever the page lacks one, so no page version can
+   ever hide it again.
+   (2) Not one Reader Report had EVER arrived (full inbox read:
+   638 responses, zero from any bundle) — the fetch() pipe from
+   this file:// page is silently void in his WebView. Reports
+   now travel by form POST (see flushReports), the transport
+   the form endpoint was built for.
+   (3) Every top-level page-element binding is guarded now
+   (bind(), below): bundle 11 bound 17 elements bare, and on
+   any older page the first missing one — #pictureClose on the
+   APK's bundle-4 page — aborted this whole script before boot.
+   Page/script divergence is harmless by construction now:
+   whatever the diagnostics need that the page lacks, the
+   script builds itself (ensureDiagUI).
+   (4) Table cells keep their own text: a reader-injected style
+   (fixSectionTables) stops unbreakable cell content — bare
+   100+ character URLs in the books he carries — from painting
+   across the next column.
+   Scroll behaviour is STILL bundle 10's, unchanged on purpose:
+   the diagnostics exist to aim that fix, and they can finally
+   be seen and can finally phone home. */
+var WEB_BUNDLE = 12;
 
 /* ---------------- helpers ---------------- */
 function $(id){ return document.getElementById(id); }
+/* Bundle 12: bind() is the ONLY way this file attaches a listener
+   to a page element at load time. Bundle 11 bound 17 elements
+   bare ($('x').addEventListener at top level); on any page older
+   than the script — the APK's bundle-4 page lacks #pictureClose,
+   pages before bundle 11 lack #diagBtn — the first missing
+   element threw, the whole script aborted, and boot never ran.
+   The shelf and its script now degrade instead of dying: a
+   missing element simply has no listener, and UI the reader
+   truly needs is injected (ensureDiagUI), never assumed. */
+function bind(id, ev, fn){
+  var el = $(id);
+  if (el) el.addEventListener(ev, fn);
+  return el;
+}
 var toastTimer = null;
 function toast(msg, ms){
-  var t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
+  var t = $('toast'); if (!t) return;   /* bundle 12: never die on a missing toast */
+  t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(function(){ t.classList.add('hidden'); }, ms || 2600);
 }
@@ -366,6 +411,7 @@ async function openBook(id){
     if (!doc) return;
     attachFootnotePopups(doc);
     attachPictureTaps(doc);
+    fixSectionTables(doc);   /* bundle 12: keep table text inside its cells */
     /* Bundle 10: a picture that finishes loading grows its
        section after epub.js sized the view — the moment the
        height audit (below) exists for. Re-audit as each lands. */
@@ -473,7 +519,7 @@ function showFootnote(text){
   $('footnoteText').textContent = text;
   $('footnoteCard').classList.remove('hidden');
 }
-$('footnoteCard').addEventListener('click', function(){
+bind('footnoteCard', 'click', function(){
   $('footnoteCard').classList.add('hidden');
 });
 
@@ -951,7 +997,12 @@ function pictureTap(){
   }, 360);
 }
 (function(){
+  /* Bundle 12: the picture view arrived with bundle 8's page;
+     on an older page there is no scroller to wire — the picture
+     feature simply isn't there, and this block must not take
+     the whole script down with it (bundle 11 wired it bare). */
   var sc = $('pictureScroll');
+  if (!sc) return;
   var downX = 0, downY = 0, moved = false;
   sc.addEventListener('touchstart', function(e){
     var t = e.touches[0];
@@ -970,7 +1021,7 @@ function pictureTap(){
     pictureTap();
   });
 })();
-$('pictureClose').addEventListener('click', function(e){
+bind('pictureClose', 'click', function(e){
   e.stopPropagation();
   closePicture();
 });
@@ -1428,10 +1479,10 @@ function stopTTS(){
   $('ttsStopBtn').classList.add('hidden');
 }
 function toggleTTS(){ if (speech.on) { stopTTS(); toast('Reading stopped'); } else startTTS(); }
-$('ttsStopBtn').addEventListener('click', function(){ toggleTTS(); });
+bind('ttsStopBtn', 'click', function(){ toggleTTS(); });
 
 /* reader controls */
-$('backBtn').addEventListener('click', function(){ closeBook(false); });
+bind('backBtn', 'click', function(){ closeBook(false); });
 /* Edge tap zones — one-screenful steps along the stream
    (bundle 9 — Joshua's hands-on report, 2026-10-30, reading the
    Tailscale book): the zones used to call rendition.next() /
@@ -1516,6 +1567,37 @@ function contentHeightOf(doc){
   return Math.max(de.clientHeight, b.scrollHeight, de.scrollHeight,
                   b.offsetHeight, de.offsetHeight);
 }
+/* Bundle 12 — table cells keep their own text. The books this
+   reader carries print bare URLs of 100+ characters inside table
+   cells (measured in "Vehicle Detail and Draw Distance": the
+   longest cell token is 130 characters), and the books' own
+   stylesheets set no break rule and no width rule for tables.
+   A cell's unbreakable text then paints straight across the
+   next column — Joshua's screenshots, 2026-10-30 — and the
+   table's minimum width bursts the section frame, which is
+   also why a "partial column" appears at the frame's edge.
+   This is a HORIZONTAL min-content problem, not the vertical
+   section sizing the bundle-10 height audit handles, so it
+   gets its own scoped rule, injected into each section that
+   actually contains a table: max-width keeps the table inside
+   the page, and overflow-wrap:anywhere lets an over-long token
+   break inside its own cell (it engages only where a word
+   cannot otherwise fit — ordinary text lays out untouched).
+   Rows may wrap taller once their text fits, so the height
+   audit re-runs after the rule lands. */
+function fixSectionTables(doc){
+  try {
+    if (!doc || !doc.head) return;
+    if (doc.querySelector('style[data-ber="tables"]')) return;
+    if (!doc.querySelector('table')) return;
+    var st = doc.createElement('style');
+    st.setAttribute('data-ber', 'tables');
+    st.textContent = 'table { max-width: 100% !important; }' +
+      'td, th { overflow-wrap: anywhere !important; }';
+    doc.head.appendChild(st);
+    scheduleViewAudit();
+  } catch (e) { /* a section that refuses styling is left as-is */ }
+}
 function auditViewHeights(){
   if (!cur.rendition || !cur.rendition.getContents) return;
   try {
@@ -1567,11 +1649,11 @@ attachGestures($('tapRight'), {
 /* Click fallback for the tap zones (exotic input only): a real
    gesture turn stamps gestureTurnAt, so the click that trails it
    never turns the page twice. */
-$('tapLeft').addEventListener('click', function(){
+bind('tapLeft', 'click', function(){
   if (Date.now() - gestureTurnAt < 600) return;
   turnPage(-1);
 });
-$('tapRight').addEventListener('click', function(){
+bind('tapRight', 'click', function(){
   if (Date.now() - gestureTurnAt < 600) return;
   turnPage(1);
 });
@@ -1585,8 +1667,8 @@ $('tapRight').addEventListener('click', function(){
    set of guards, no dead ground anywhere on the screen. */
 
 /* add books */
-$('addBtn').addEventListener('click', function(){ $('fileInput').click(); });
-$('fileInput').addEventListener('change', async function(ev){
+bind('addBtn', 'click', function(){ $('fileInput').click(); });
+bind('fileInput', 'change', async function(ev){
   var files = Array.prototype.slice.call(ev.target.files || []);
   ev.target.value = '';
   for (var i = 0; i < files.length; i++) {
@@ -1639,7 +1721,20 @@ function readerVersionTag(){
   } catch (e) {}
   return 'Reader shell ' + shell + ' · web bundle ' + WEB_BUNDLE +
     (serving != null && serving !== WEB_BUNDLE
-      ? ' (shell serving ' + serving + ')' : '');
+      ? ' (shell serving ' + serving + ')' : '') +
+    /* Bundle 12: a page that claims a different bundle than the
+       script running on it is named here too (see pageClaim). */
+    (pageClaim() != null && pageClaim() !== WEB_BUNDLE
+      ? ' (page claims bundle ' + pageClaim() + ')' : '');
+}
+/* Bundle 12: the page's own bundle claim. Bundle 12+ pages carry
+   a hidden #pageMark stamped with the bundle the page belongs
+   to; older pages claim nothing (null). */
+function pageClaim(){
+  var m = $('pageMark');
+  var v = m && m.getAttribute ? m.getAttribute('data-bundle') : null;
+  var n = v ? parseInt(v, 10) : NaN;
+  return isNaN(n) ? null : n;
 }
 function reportStore(key, fallback){
   try {
@@ -1651,36 +1746,110 @@ function reportSave(key, val){
   try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
 }
 var reportSending = false;
+/* Bundle 12 — the transport changed, on evidence. Bundles 8–11
+   sent these reports with fetch() from this page, whose origin
+   is file:///android_asset/. A full read of the reports inbox
+   (638 responses, 2026-10-30) holds NOT ONE reader report from
+   any bundle — while the same form receives the game's reports
+   (posted from an https page) and the suite editors' (posted
+   from Python). The reader's fetch is the only link in that
+   chain that differs, and a WebView page on a file:// origin is
+   exactly where fetch can be silently void: the shell never
+   enables file-origin network access (MainActivity sets
+   allowFileAccess/allowContentAccess but neither
+   setAllowFileAccessFromFileURLs nor
+   setAllowUniversalAccessFromFileURLs). Every report those
+   bundles queued is still sitting on the phone.
+   A form POST is a NAVIGATION, not a fetch: no CORS, no origin
+   rules, and it is the transport this endpoint was built for.
+   The form submits into a hidden iframe, so the reader itself
+   never navigates and nothing shows. "Sent" keeps the old
+   opacity contract — a submitted form is what "sent" can mean
+   here, exactly as a resolved no-cors fetch was before. Sends
+   are serialized with a pause between: a submission must be
+   under way before the next one reuses the sink frame. The
+   fetch path survives only as a fallback for the case where
+   the form cannot even be built (no document body yet). */
+var reportSink = null;
+function buildReportSink(){
+  if (reportSink) return reportSink;
+  if (!document.body) return null;
+  var ifr = document.createElement('iframe');
+  ifr.name = 'berReportSink';
+  ifr.style.display = 'none';
+  ifr.setAttribute('aria-hidden', 'true');
+  var form = document.createElement('form');
+  form.method = 'POST';
+  form.action = REPORT_FORM_URL;
+  form.target = 'berReportSink';
+  form.style.display = 'none';
+  var names = [REPORT_ENTRIES.type, REPORT_ENTRIES.message,
+    REPORT_ENTRIES.version, REPORT_ENTRIES.where, REPORT_ENTRIES.device];
+  var fields = {};
+  for (var i = 0; i < names.length; i++) {
+    var inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = names[i];
+    form.appendChild(inp);
+    fields[names[i]] = inp;
+  }
+  document.body.appendChild(ifr);
+  document.body.appendChild(form);
+  reportSink = { form: form, fields: fields };
+  return reportSink;
+}
+function fillReportFields(set, item){
+  set(REPORT_ENTRIES.type, 'Reader Report');
+  set(REPORT_ENTRIES.message, item.message);
+  set(REPORT_ENTRIES.version, item.version);
+  set(REPORT_ENTRIES.where, item.where);
+  set(REPORT_ENTRIES.device, item.device);
+}
+/* Send one queued item; done(true) retires it, done(false)
+   keeps it queued for a later launch. */
+function sendReportItem(item, done){
+  var sink = buildReportSink();
+  if (sink) {
+    try {
+      fillReportFields(function(k, v){ sink.fields[k].value = v; }, item);
+      sink.form.submit();
+      done(true);
+      return;
+    } catch (e) { /* form unusable here: try the fetch path */ }
+  }
+  try {
+    var body = new URLSearchParams();
+    fillReportFields(function(k, v){ body.set(k, v); }, item);
+    fetch(REPORT_FORM_URL, { method: 'POST', mode: 'no-cors',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    }).then(function(){ done(true); },
+            function(){ done(false); });
+  } catch (e) { done(false); }
+}
 function flushReports(){
   if (reportSending) return;
   var queue = reportStore('ber-report-queue', []);
   if (!queue.length) return;
   var item = queue[0];
   reportSending = true;
-  var body = new URLSearchParams();
-  body.set(REPORT_ENTRIES.type, 'Reader Report');
-  body.set(REPORT_ENTRIES.message, item.message);
-  body.set(REPORT_ENTRIES.version, item.version);
-  body.set(REPORT_ENTRIES.where, item.where);
-  body.set(REPORT_ENTRIES.device, item.device);
-  fetch(REPORT_FORM_URL, { method: 'POST', mode: 'no-cors',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString()
-  }).then(function(){
-    /* The form answers opaquely (no-cors): a resolved fetch is
-       "sent". Record the signature, drop the item, send the next. */
-    var sent = reportStore('ber-report-sent', {});
-    sent[item.sig] = Date.now();
-    reportSave('ber-report-sent', sent);
-    var q = reportStore('ber-report-queue', []);
-    q = q.filter(function(x){ return x.sig !== item.sig; });
-    reportSave('ber-report-queue', q);
+  sendReportItem(item, function(sent){
+    if (sent) {
+      /* Submitted: record the signature, drop the item, and
+         pause before the next send (see the transport note). */
+      var sentMap = reportStore('ber-report-sent', {});
+      sentMap[item.sig] = Date.now();
+      reportSave('ber-report-sent', sentMap);
+      var q = reportStore('ber-report-queue', []);
+      q = q.filter(function(x){ return x.sig !== item.sig; });
+      reportSave('ber-report-queue', q);
+    }
+    /* Not sent (offline, or the form endpoint unreachable):
+       the queue keeps the report for a later launch. Never
+       itself worth a report. */
     reportSending = false;
-    flushReports();
-  }).catch(function(){
-    /* Offline or unreachable: the queue keeps the report for a
-       later launch. Never itself worth a report. */
-    reportSending = false;
+    if (sent && reportStore('ber-report-queue', []).length)
+      setTimeout(flushReports, 1200);
   });
 }
 function reportError(where, message){
@@ -1836,6 +2005,17 @@ function diagCollect(trigger){
   lines.push('trigger: ' + trigger);
   lines.push('running: web bundle ' + WEB_BUNDLE + ' · shell serving ' +
     (serving == null ? '?' : serving) + ' · shell ' + shell);
+  /* Bundle 12: the page under the script is part of the
+     measurement — its own bundle claim and whether its
+     diagnostics UI was born with it or injected by this script.
+     A report can then never be mistaken about which page/script
+     pair produced it. */
+  var pm = pageMarkers();
+  lines.push('page: claims bundle ' + (pm.mark == null ? 'none (pre-12 page)' : pm.mark) +
+    ' · diag UI ' + (diagPageBorn == null ? (pm.diag ? 'in page' : 'absent')
+      : (diagPageBorn ? 'in page' : 'injected by script')) +
+    ' · notice ' + (pm.notice ? 'yes' : 'no') +
+    ' · picture view ' + (pm.picture ? 'yes' : 'no'));
   lines.push('ua: ' + String(navigator.userAgent || '').slice(0, 120));
   lines.push('view: ' + window.innerWidth + 'x' + window.innerHeight +
     ' · dpr ' + (window.devicePixelRatio || 1));
@@ -1994,9 +2174,79 @@ function diagArmDocs(){
         diagProbeArmOn(list[i].document, 'page', dragProbe);
   } catch (e) {}
 }
+/* ---- page self-repair (bundle 12) ----
+   Which generation is the PAGE under this script? The shell
+   serves page and script from one bundle, but bundle 12 refuses
+   to depend on that: it reads the page's markers, and whatever
+   the diagnostics need that the page lacks, it builds itself.
+   On bundle 11's own page all of this is a no-op; on any older
+   page it is the difference between a diagnostics door that
+   exists and one that doesn't. */
+function pageMarkers(){
+  return {
+    mark: pageClaim(),
+    diag: !!($('diagBtn') && $('diagPanel')),
+    notice: !!$('addedNotice'),
+    picture: !!$('pictureView')
+  };
+}
+var diagPageBorn = null;   // set by ensureDiagUI: page-born or injected?
+function ensureDiagUI(){
+  /* Remember whether the diagnostics UI was born with the page
+     or had to be injected — the measurements report it, so a
+     report always says which kind of page produced it. */
+  if (diagPageBorn === null)
+    diagPageBorn = !!($('diagBtn') && $('diagPanel'));
+  try {
+    /* The full-width diagnostics bar: the door that cannot hide
+       inside a wrapping toolbar row (bundle 11's button sat in
+       a five-button flex row on a small screen, and two people
+       looked straight past it). Sits directly under the shelf
+       tools; injected whenever the page doesn't carry one. */
+    if (!$('diagBar')) {
+      var tools = document.querySelector('.shelf-tools');
+      var bar = document.createElement('button');
+      bar.id = 'diagBar';
+      bar.className = 'diag-bar';
+      bar.textContent = 'Reader diagnostics — tap to view the scroll check';
+      if (tools && tools.parentNode)
+        tools.parentNode.insertBefore(bar, tools.nextSibling);
+      else if (document.body) document.body.appendChild(bar);
+    }
+    /* The toolbar button, for pages that predate it. */
+    if (!$('diagBtn')) {
+      var tools2 = document.querySelector('.shelf-tools');
+      if (tools2) {
+        var b = document.createElement('button');
+        b.id = 'diagBtn';
+        b.className = 'toolbtn';
+        b.textContent = 'Diagnostics';
+        tools2.appendChild(b);
+      }
+    }
+    /* The panel itself, same markup the bundle-12 page carries
+       statically, for pages that predate it. */
+    if (!$('diagPanel')) {
+      var panel = document.createElement('div');
+      panel.id = 'diagPanel';
+      panel.className = 'hidden';
+      panel.innerHTML =
+        '<div class="diag-card">' +
+        '<div class="sync-head"><div class="sync-title">Reader diagnostics</div></div>' +
+        '<div id="diagText">Measuring…</div>' +
+        '<button id="diagRefresh" class="toolbtn">Measure again</button>' +
+        '<button id="diagSend" class="toolbtn">Send report</button>' +
+        '<button id="diagClose" class="toolbtn">Close</button>' +
+        '</div>';
+      document.body.appendChild(panel);
+    }
+  } catch (e) { /* self-repair must never break the shelf */ }
+}
 /* ---- the shelf Diagnostics panel ---- */
 var diagShownText = '';
 function showDiagPanel(){
+  ensureDiagUI();   /* bundle 12: the panel exists, whatever page this is */
+  if (!$('diagPanel') || !$('diagText')) return;
   $('diagPanel').classList.remove('hidden');
   $('diagText').textContent = 'Measuring…';
   diagCollect('shelf').then(function(d){
@@ -2005,15 +2255,21 @@ function showDiagPanel(){
     if (last && last.text)
       txt += '\n--- last book-open measurement ---\n' + last.text;
     diagShownText = d.headline + '\n' + txt;
-    $('diagText').textContent = txt;
+    if ($('diagText')) $('diagText').textContent = txt;
   });
 }
-$('diagBtn').addEventListener('click', showDiagPanel);
-$('diagClose').addEventListener('click', function(){
-  $('diagPanel').classList.add('hidden');
+/* Bundle 12: build any missing diagnostics UI BEFORE binding it,
+   and bind through bind() — an older page can no longer abort
+   this script here (bundle 11 bound these four bare, at what was
+   then the script's most fragile point). */
+ensureDiagUI();
+bind('diagBtn', 'click', showDiagPanel);
+bind('diagBar', 'click', showDiagPanel);
+bind('diagClose', 'click', function(){
+  if ($('diagPanel')) $('diagPanel').classList.add('hidden');
 });
-$('diagRefresh').addEventListener('click', showDiagPanel);
-$('diagSend').addEventListener('click', function(){
+bind('diagRefresh', 'click', showDiagPanel);
+bind('diagSend', 'click', function(){
   if (!diagShownText) return;
   reportDiag('Scroll diagnostics', diagShownText, true);
   toast('Diagnostics sent — thank you.');
@@ -2071,6 +2327,10 @@ function folderProgress(){
 var noticeTitles = [];
 function showAddedNotice(titles){
   if (!titles || !titles.length) return;
+  /* Bundle 12: the notice markup arrived with bundle 8's page;
+     on an older page there is nowhere to show it — skip quietly
+     (the books themselves are already shelved either way). */
+  if (!$('addedNotice') || !$('addedNoticeText')) return;
   for (var i = 0; i < titles.length; i++)
     if (noticeTitles.indexOf(titles[i]) < 0) noticeTitles.push(titles[i]);
   var lines = [];
@@ -2085,7 +2345,7 @@ function showAddedNotice(titles){
   $('addedNoticeText').textContent = lines.join('\n');
   $('addedNotice').classList.remove('hidden');
 }
-$('addedNoticeOk').addEventListener('click', function(){
+bind('addedNoticeOk', 'click', function(){
   $('addedNotice').classList.add('hidden');
   noticeTitles = [];
 });
@@ -2209,16 +2469,16 @@ window.__folderPickFailed = function(){
     'The system folder picker could not be opened on this phone.');
   toast("Couldn't open the folder picker on this phone.");
 };
-$('importOk').addEventListener('click', function(){
+bind('importOk', 'click', function(){
   $('importOverlay').classList.add('hidden');
 });
-$('addFolderBtn').addEventListener('click', function(){
+bind('addFolderBtn', 'click', function(){
   if (window.ReaderBridge && ReaderBridge.pickFolder) {
     try { ReaderBridge.pickFolder(); return; } catch (e) {}
   }
   toast('Adding a whole folder works in the app on your phone.');
 });
-$('refreshFoldersBtn').addEventListener('click', function(){
+bind('refreshFoldersBtn', 'click', function(){
   pendingScanQuiet = false;   // a manual refresh is never the quiet auto-check
   if (window.ReaderBridge && ReaderBridge.rescanFolders) {
     var n = 0;
@@ -2256,7 +2516,7 @@ function updateVerLine(){
   var newer = Math.max(serving || 0, pendingBundle || 0);
   if (newer > WEB_BUNDLE)
     line += ' · update ' + newer + ' ready — close and reopen the reader to use it';
-  $('verLine').textContent = line;
+  var vl = $('verLine'); if (vl) vl.textContent = line;   /* bundle 12: guarded */
 }
 window.__updateCheckResult = function(status, version){
   if (status === 'current') {
@@ -2277,7 +2537,7 @@ window.__updateCheckResult = function(status, version){
   }
   updateVerLine();
 };
-$('updateBtn').addEventListener('click', function(){
+bind('updateBtn', 'click', function(){
   if (window.ReaderBridge && ReaderBridge.checkForUpdates) {
     toast('Checking for updates…');
     try { ReaderBridge.checkForUpdates(); return; } catch (e) {}
@@ -2354,6 +2614,31 @@ function maybeAutoFolderCheck(){
   }
   renderShelf();
   updateVerLine();
+  ensureDiagUI();   /* bundle 12: present before anyone goes looking */
+  /* Bundle 12: one boot report per distinct state — the report
+     pipe's proof of life and the phone's own account of itself:
+     the running bundle, the shell's serving number, the page's
+     bundle claim, whether the diagnostics UI was page-born or
+     injected, and whether a scroll measurement is already
+     stored from a previous session. The first line carries the
+     state, so the reporter's dedupe sends it once per state
+     and again whenever the state changes. If this report is in
+     the inbox, the pipe works — that is its whole job. */
+  var bootServing = null;
+  try {
+    if (window.ReaderBridge && ReaderBridge.webBundleVersion)
+      bootServing = ReaderBridge.webBundleVersion();
+  } catch (e) {}
+  var bootDiag = reportStore(DIAG_KEY_LAST, null);
+  reportError('Reader boot',
+    'boot: web bundle ' + WEB_BUNDLE + ' · shell serving ' +
+    (bootServing == null ? '?' : bootServing) +
+    ' · page claims ' + (pageClaim() == null ? 'none (pre-12 page)' : 'bundle ' + pageClaim()) +
+    ' · diag UI ' + (diagPageBorn == null ? 'unknown'
+      : (diagPageBorn ? 'in page' : 'injected by script')) +
+    '\nstored scroll measurement: ' + (bootDiag && bootDiag.text
+      ? 'yes, from ' + new Date(bootDiag.ts).toISOString()
+      : 'none yet'));
   setTimeout(maybeAutoFolderCheck, 900);
   setTimeout(flushReports, 1600);   /* drain any reports queued offline */
 })();
