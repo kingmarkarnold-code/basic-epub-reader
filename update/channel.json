@@ -1,1 +1,24 @@
-{"bundleVersion":12,"files":{"app.js":{"path":"files/app.js","sha256":"450637144017bffdee05c9d9cc78b437d90fc37c2e8cc6e7970db9dab5403d42"},"index.html":{"path":"files/index.html","sha256":"480744aeee2125dca1d3dfe6c83286f58c3ce75a2cab04594ae4ff7037939a0d"},"style.css":{"path":"files/style.css","sha256":"710935fd2d21efb4a4b9e9d5fb34d74fbd55801a1f66d59428bd50b4056f418c"},"sync-client.js":{"path":"files/sync-client.js","sha256":"6e416fac60a85266f2f2a4fe3ea8c433c397adc092ac223de51c34a8a850ca4c"}},"minShellVersion":4,"note":"Web bundle 12 - diagnostics that can be seen and can phone home; no reading-behaviour change. Three fixes from bundle 11's own evidence. (1) Reports now travel by form POST (a hidden form into a hidden iframe) instead of fetch(): a full read of the reports inbox (638 responses) found zero Reader Reports from bundles 8-11, while the same form receives the game's reports (posted from an https page) and the editors' (posted from Python) - the reader's fetch from its file:// origin was the only differing link, and the shell never enables file-origin network access. A one-time-per-state boot report proves the new pipe on first open. (2) The Diagnostics door is unmissable now: a full-width 'Reader diagnostics' bar under the shelf tools (in this bundle's page, and injected by app.js on any older page), beside the toolbar button; the button and panel are likewise injected whenever the page under the script predates them, and every page-element binding in app.js is guarded, so a page older than the script can never abort it before boot again (bundle 11 bound 17 elements bare; on the APK's bundle-4 page the first missing one, #pictureClose, would have killed the script). Each measurement names the page it ran on: the page's bundle claim, and whether its diagnostics UI was page-born or injected. (3) Table cells keep their own text: sections containing tables get a reader style (table max-width 100%; overflow-wrap anywhere on cells) so bare 100+ character URLs stop painting across the next column - measured in 'Vehicle Detail and Draw Distance', longest cell token 130 characters; a horizontal min-content problem, separate from the section-height audit. Scroll behaviour remains bundle 10's, unchanged on purpose: the scroll fix gets built from the measurements this bundle finally delivers and displays.","publishedAt":"2026-10-30"}
+{
+  "bundleVersion": 12,
+  "files": {
+    "app.js": {
+      "path": "files/app.js",
+      "sha256": "450637144017bffdee05c9d9cc78b437d90fc37c2e8cc6e7970db9dab5403d42"
+    },
+    "index.html": {
+      "path": "files/index.html",
+      "sha256": "e1b7261e7a1e70fcdb8efb717619efb8f50e9e3f20a71ecb0880ecaf92246fb4"
+    },
+    "style.css": {
+      "path": "files/style.css",
+      "sha256": "710935fd2d21efb4a4b9e9d5fb34d74fbd55801a1f66d59428bd50b4056f418c"
+    },
+    "sync-client.js": {
+      "path": "files/sync-client.js",
+      "sha256": "6e416fac60a85266f2f2a4fe3ea8c433c397adc092ac223de51c34a8a850ca4c"
+    }
+  },
+  "minShellVersion": 4,
+  "note": "Web bundle 12 - diagnostics that can be seen and can phone home; no reading-behaviour change. Three fixes from bundle 11's own evidence. (1) Reports now travel by form POST (a hidden form into a hidden iframe) instead of fetch(): a full read of the reports inbox (638 responses) found zero Reader Reports from bundles 8-11, while the same form receives the game's reports (posted from an https page) and the editors' (posted from Python) - the reader's fetch from its file:// origin was the only differing link, and the shell never enables file-origin network access. A one-time-per-state boot report proves the new pipe on first open. (2) The Diagnostics door is unmissable now: a full-width 'Reader diagnostics' bar under the shelf tools (in this bundle's page, and injected by app.js on any older page), beside the toolbar button; the button and panel are likewise injected whenever the page under the script predates them, and every page-element binding in app.js is guarded, so a page older than the script can never abort it before boot again (bundle 11 bound 17 elements bare; on the APK's bundle-4 page the first missing one, #pictureClose, would have killed the script). Each measurement names the page it ran on: the page's bundle claim, and whether its diagnostics UI was page-born or injected. (3) Table cells keep their own text: sections containing tables get a reader style (table max-width 100%; overflow-wrap anywhere on cells) so bare 100+ character URLs stop painting across the next column - measured in 'Vehicle Detail and Draw Distance', longest cell token 130 characters; a horizontal min-content problem, separate from the section-height audit. Scroll behaviour remains bundle 10's, unchanged on purpose: the scroll fix gets built from the measurements this bundle finally delivers and displays.",
+  "publishedAt": "2026-10-30"
+}
