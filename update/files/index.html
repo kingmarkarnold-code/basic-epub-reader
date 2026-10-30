@@ -29,6 +29,14 @@
     <button id="updateBtn" class="toolbtn">Check for updates</button>
   </div>
   <div id="shelfScroll">
+    <!-- Added-books notice (bundle 8 — Joshua, 2026-10-30): when a
+         folder check brings new books, the shelf SAYS SO, naming
+         them. Dismissed with its OK button; in-flow, so it never
+         blocks the shelf, and it stays until dismissed. -->
+    <div id="addedNotice" class="hidden">
+      <div id="addedNoticeText"></div>
+      <button id="addedNoticeOk" class="barbtn">OK</button>
+    </div>
     <div id="shelf"></div>
     <div id="shelfEmpty" class="hidden">
       <p>Your shelf is empty.</p>
@@ -77,6 +85,19 @@
 <div id="footnoteCard" class="hidden">
   <div id="footnoteText"></div>
   <div id="footnoteHint">Tap anywhere to close</div>
+</div>
+
+<!-- ==================== FULLSCREEN PICTURE ===================== -->
+<!-- Bundle 8 (Joshua, 2026-10-30): tapping a picture in a book
+     opens it on the whole screen, fitted so the whole picture is
+     visible. The X (top right) closes it; a single tap closes it
+     too; a double tap toggles between fitted and full size, and
+     at full size the view scrolls so every part of a big picture
+     can be reached. Closing returns to the exact reading place —
+     the rendition underneath is never touched. -->
+<div id="pictureView" class="hidden">
+  <div id="pictureScroll"><img id="pictureImg" alt="Picture from the book"></div>
+  <button id="pictureClose" title="Close picture">&#10005;</button>
 </div>
 
 <!-- ================= FOLDER IMPORT PROGRESS ================== -->
