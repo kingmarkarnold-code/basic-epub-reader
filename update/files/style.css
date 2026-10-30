@@ -179,6 +179,29 @@ body.fullscreen #viewer {
 #syncPanel .toolbtn:disabled { opacity:.55; }
 .sync-found-item { display:block; width:100%; text-align:left; margin:4px 0; }
 
+/* ---------- scroll diagnostics panel (bundle 11) ----------
+   Same card pattern as the sync screen. The measurement text
+   is selectable (the one place user-select is turned back on)
+   so the values can be read aloud or copied exactly as the
+   reader measured them. */
+#diagPanel {
+  position:fixed; inset:0; z-index:57; overflow-y:auto;
+  background:rgba(20,10,2,.72); padding:22px 14px;
+}
+.diag-card {
+  background:#fffaf0; color:#2a2118; border:2px solid #b98a45;
+  border-radius:12px; padding:16px; max-width:520px; margin:0 auto;
+  box-shadow:0 10px 30px rgba(0,0,0,.65); font-size:15px; line-height:1.5;
+}
+#diagText {
+  white-space:pre-wrap; word-break:break-word;
+  font-family:monospace; font-size:12.5px; line-height:1.55;
+  background:#f3e5c6; border:1px solid #d9bd85; border-radius:8px;
+  padding:9px 11px; margin-bottom:12px;
+  -webkit-user-select:text; user-select:text;
+}
+#diagPanel .toolbtn { margin:6px 6px 6px 0; }
+
 /* ---------- added-books notice (bundle 8) ---------- */
 #addedNotice {
   margin:0 8px 14px; padding:14px 16px 12px;
