@@ -1,13 +1,13 @@
 {
-  "bundleVersion": 9,
+  "bundleVersion": 10,
   "files": {
     "app.js": {
       "path": "files/app.js",
-      "sha256": "8d9c033b9803a3d0cc95060ef634c4b45ff4a8f33f007ba1d7ec18d37605e61a"
+      "sha256": "e357efa919c4f1e0bf447d7d1647839f28c6dddb7133bce1b7bb9f8b36d8473a"
     },
     "index.html": {
       "path": "files/index.html",
-      "sha256": "748a10f12770cda9f608056452f9725efad88ed314ddfa4303eecf63b6c67f71"
+      "sha256": "d3ef028645659f3efcc52cd8319224274d86b1c0a46945f14bb6c1b0f0ec154d"
     },
     "style.css": {
       "path": "files/style.css",
@@ -19,6 +19,6 @@
     }
   },
   "minShellVersion": 4,
-  "note": "Web bundle 9 - the reader speaks up, pictures open, taps step one screenful, and full screen keeps text off the glass edge. (1) Silent failures report home: a damaged book gets 30 seconds to be read and no more, so one corrupt file can no longer wedge a folder check without a word; and the errors the app meets - a book that will not open, a scan that fails - are sent to the same Player Reports inbox the game uses. (2) When a folder check brings in new books, the shelf says so and names them, instead of the books simply appearing (or, as it felt, not). (3) Tapping a picture in a book opens it on the whole screen: fitted so the whole picture shows, scrollable at full size, an X at the top right to close, and the reading place underneath untouched. (4) The edge tap zones no longer make epub.js's section step: reading the Tailscale book (Joshua, 2026-10-30), one NEXT tap in chapter 1 jumped to the chapter's end, PREVIOUS jumped back to the contents, and other taps landed mid-content and at chapter starts - the paragraphs that felt missing were being stepped over. The book is one continuous stream and a tap now steps the scroll by exactly one screenful, laid on a fixed ladder of screenfuls from the top of the book with about a line and a half of overlap, so NEXT and PREV land on the same screenfuls in both directions; a chapter's end shows its partial screen and the next tap carries across the seam, exactly like scrolling across it. (5) In full screen the viewer itself is inset on all four sides - the larger of a small fixed buffer (14px top/bottom, 12px sides) and the phone's own safe-area inset - so the topmost and bottommost lines and the text near the rounded corners no longer sit in the slightly faded edge zone. Outside full screen nothing changes. Scrolled flow, drag-scrolling from the zones, read-aloud from the view, pinch text size and footnote pop-ups are unchanged.",
+  "note": "Web bundle 10 - the reader walks its own stream, one tap is one page, sections cannot overlap, and the shelf says which bundle is truly running. (1) Scrolling no longer depends on the WebView chaining a drag that starts on a book page up to epub.js's scroll container: the gesture layer now walks that container by the finger's own delta, on the page and the edge zones alike, with a short decaying fling when a flick is released. Bundle 9 would not scroll at all in Joshua's hands on the TCL while the same code scrolled in desktop Chrome - the chaining is the WebView's choice, so the reader no longer asks it to choose. (2) One edge tap previously fired the page turn twice: the touch path served it, then the engine replayed the tap as compatibility mouse events and served it again - two screenful ladder rungs per tap. Taps now pass one gate that tells a replay (a different input path within 700 ms) from a genuine second tap (the same path again), so one tap steps exactly one screenful on the ladder and quick double taps still turn two pages. (3) epub.js sizes each section's box once, when the section loads; content that grows afterwards (a picture finishing, a font swapping in) spilled past the box and the next section printed over its tail - the overlapping words. The reader now audits its live sections against epub.js's own height measure after opens, renders, font changes, picture loads and full-screen settles, and grows any box that has come up short; it never shrinks one. (4) The shelf's version line names the bundle whose code is actually running - the number travels inside app.js itself. A bundle applies only at a true cold start, and bundle 9's passing toast could be read as the update being in while older code still served the touches; now, when a newer bundle is downloaded and waiting, the shelf keeps saying 'update N ready - close and reopen the reader to use it' until the running code catches up, and error reports name the running bundle too. Scrolled flow, the tap ladder, the safe-area full-screen buffer, picture viewing, read-aloud and footnote pop-ups are otherwise unchanged.",
   "publishedAt": "2026-10-30"
 }
