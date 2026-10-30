@@ -281,8 +281,22 @@ async function openBook(id){
   var book = ePub(rec.data.slice(0));
   cur.book = book;
   await book.ready;
+  /* Reading flow (bundle 7 — Joshua's hands-on report, 2026-10-30):
+     the book SCROLLS. Under flow 'paginated' epub.js clips every
+     page to exactly the screen and lays the text out in columns
+     with overflow hidden — a page holding more than a screenful
+     had no way to be read past the fold: he rotated the TCL
+     mid-page, the words reflowed to the new layout perfectly, and
+     then found a drag did nothing at all, because in paginated
+     mode nothing on the page is a scrollable surface. Scrolled
+     flow + the continuous manager lays the sections out in one
+     tall, vertically scrolling view: a drag scrolls the text,
+     next()/prev() (edge tap zones, the read-aloud page chase)
+     step one screenful at a time, and rotation simply reflows
+     the same scrolling view. */
   var rendition = book.renderTo('viewer', {
-    width: '100%', height: '100%', flow: 'paginated', spread: 'none'
+    width: '100%', height: '100%', flow: 'scrolled',
+    manager: 'continuous', spread: 'none'
   });
   cur.rendition = rendition;
   rendition.themes.default({
@@ -815,7 +829,29 @@ function buildPageSentences(){
   var loc = null, list = null;
   try { loc = cur.rendition.currentLocation(); list = cur.rendition.getContents(); } catch (e) {}
   if (!loc || !loc.start || !loc.end || !list || !list.length) return null;
+  /* Scrolled flow keeps several sections loaded at once (bundle
+     7), so "the page in view" is no longer simply the first
+     contents in the list: pick the one the location is standing
+     in. The location's CFI arrives wrapped ("epubcfi(/6/6!/…)"),
+     so unwrap it and match the section's cfiBase ("/6/6") at a
+     step boundary — a bare prefix test would also let section 3
+     claim section 30's CFIs. The section index is the backup
+     test. Falling back to the first contents is the old
+     behaviour, kept only for a shape this reader never makes. */
   var contents = list[0];
+  var locCfi = String(loc.start.cfi || '');
+  if (locCfi.indexOf('epubcfi(') === 0)
+    locCfi = locCfi.slice('epubcfi('.length, -1);
+  for (var ci = 0; ci < list.length; ci++) {
+    var cand = list[ci];
+    if (!cand) continue;
+    if (cand.cfiBase && (locCfi === cand.cfiBase ||
+        locCfi.indexOf(cand.cfiBase + '!') === 0 ||
+        locCfi.indexOf(cand.cfiBase + '/') === 0)) { contents = cand; break; }
+    if (typeof cand.sectionIndex === 'number' &&
+        typeof loc.start.index === 'number' &&
+        cand.sectionIndex === loc.start.index) contents = cand;
+  }
   if (!contents || !contents.document || !contents.range) return null;
   var startR = null, endR = null;
   try {
@@ -1049,6 +1085,44 @@ $('tapRight').addEventListener('click', function(){
   if (Date.now() - gestureTurnAt < 600) return;
   if (cur.rendition) cur.rendition.next();
 });
+/* Drag-scrolling from the tap zones (bundle 7): the zones are
+   plain overlay strips, so a vertical drag that STARTS on one
+   lands on the strip, not on the book's scrolling view beneath
+   it — without help, the outer 22% on each side would be dead
+   ground for scrolling. While one finger drags on a zone, walk
+   the book's scroll container by the same delta, so a scroll
+   drag works from anywhere on the screen, edges included. Taps
+   are untouched: under the gesture layer's own movement
+   threshold nothing here fires, and a drag that did scroll
+   stamps gestureTurnAt so the click fallback trailing it can
+   never also turn the page. */
+function attachZoneDragScroll(el){
+  var drag = null;
+  el.addEventListener('touchstart', function(ev){
+    drag = (ev.touches.length === 1)
+      ? { y: ev.touches[0].clientY, moved: false } : null;
+  }, { passive: true });
+  el.addEventListener('touchmove', function(ev){
+    if (!drag || ev.touches.length !== 1) return;
+    var y = ev.touches[0].clientY;
+    var dy = drag.y - y;
+    drag.y = y;
+    if (dy === 0) return;
+    drag.moved = true;
+    if (ev.cancelable) ev.preventDefault();
+    var c = cur.rendition && cur.rendition.manager &&
+            cur.rendition.manager.container;
+    if (c) c.scrollTop += dy;
+  }, { passive: false });
+  function endDrag(){
+    if (drag && drag.moved) gestureTurnAt = Date.now();
+    drag = null;
+  }
+  el.addEventListener('touchend', endDrag);
+  el.addEventListener('touchcancel', endDrag);
+}
+attachZoneDragScroll($('tapLeft'));
+attachZoneDragScroll($('tapRight'));
 
 /* add books */
 $('addBtn').addEventListener('click', function(){ $('fileInput').click(); });
