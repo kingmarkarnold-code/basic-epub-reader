@@ -53,7 +53,7 @@
    Scroll behaviour is STILL bundle 10's, unchanged on purpose:
    the diagnostics exist to aim that fix, and they can finally
    be seen and can finally phone home. */
-var WEB_BUNDLE = 12;
+var WEB_BUNDLE = 13;
 
 /* ---------------- helpers ---------------- */
 function $(id){ return document.getElementById(id); }
@@ -386,8 +386,9 @@ async function openBook(id){
   });
   cur.rendition = rendition;
   rendition.themes.default({
-    /* user-select off: a long-press on the page means "read aloud"
-       (Joshua's gesture), never text selection.
+    /* user-select off: the gesture layer owns the page's touches
+       (bundle 13: double-tap means "read aloud"), never text
+       selection.
        Vertical body margins zeroed (bundle 9): in the continuous
        stream each section is its own document, and a section's
        own top/bottom margins would stack into a visible gap at
@@ -423,7 +424,8 @@ async function openBook(id){
     /* Reading gestures live INSIDE the page: epub.js renders each
        page in an iframe whose touches never reach the outer page,
        so every section document gets its own gesture handlers.
-       No long-press menu, ever — a hold means read-aloud. */
+       No long-press menu, ever (bundle 13: a hold is inert —
+       read-aloud moved to double-tap by Joshua's ruling). */
     doc.addEventListener('contextmenu', function(ev){ ev.preventDefault(); });
     attachGestures(doc, pageGestureHandlers());
   });
@@ -518,20 +520,46 @@ window.__closeReader = function(){
 function showFootnote(text){
   $('footnoteText').textContent = text;
   $('footnoteCard').classList.remove('hidden');
+  /* Bundle 13: stamp WHEN the card opened — the page tap handler
+     compares it with a tap's acceptance time so the tap that
+     opened this card never dismisses it (see pageGestureHandlers). */
+  window.__footnoteShownAt = Date.now();
 }
 bind('footnoteCard', 'click', function(){
   $('footnoteCard').classList.add('hidden');
 });
 
-/* ================= reading gestures (Joshua, 2026-10-28) ==========
+/* ================= reading gestures (Joshua, 2026-10-28;
+   revised by his ruling of 2026-11-01, bundle 13) ==========
    Single tap on the page ....... toggle full screen
-   Tap-and-hold ................. read aloud from here / stop
+   Single tap on a marked (blue) term
+                                ... its definition, floated in place
+                                    (the footnote pop-up — unchanged)
+   Double-tap (page or edges) ... read aloud from here / stop
+   Tap-and-hold ................. nothing (freed in bundle 13: it
+                                    used to start read-aloud, which
+                                    collided with his expectation of
+                                    a dictionary hold; a hold on an
+                                    ordinary word for a dictionary
+                                    lookup needs shell wiring that
+                                    does not exist yet — see
+                                    BUNDLE13-REPORT.md)
    Pinch out / pinch in ......... bigger / smaller text (persisted)
    Tap the left/right edges ..... previous / next page (unchanged)
    The handlers attach to each book page's own document (see the
    content hook in openBook) and to the two tap zones, because the
    pages live in an epub.js iframe whose touches stay inside it. */
 var LONG_PRESS_MS = 600, TAP_MAX_MS = 400, MOVE_MAX_PX = 14;
+/* Bundle 13 gesture constants: the double-tap window (a single tap
+   on a surface that also recognises double-taps is held this long
+   to see whether a second tap lands — the measured cost of the
+   double-tap ruling, reported in BUNDLE13-REPORT.md), the largest
+   single walk step one touchmove may apply, and the fastest
+   release fling the drag may launch (both caps are guards against
+   corrupted touch coordinates — see walkScrollBy's bundle-13
+   note — not limits a real finger can reach: a fast flick moves
+   ~40 px per move event and releases at well under 3 px/ms). */
+var DOUBLE_TAP_MS = 300, WALK_STEP_MAX = 120, FLING_V_MAX = 3;
 var gestureTurnAt = 0;   // lets the plain click fallback stay a fallback
 var lastTapHandledAt = 0;   // stamped whenever a tap/hold/pinch completes,
                             // so the click fallback below can tell a tap
@@ -573,7 +601,10 @@ function startScrollFling(v0){
   cancelScrollFling();
   var c = scrollContainer();
   if (!c || !isFinite(v0) || v0 === 0) return;
-  scrollFling.v = v0;
+  /* Bundle 13: the fling is capped (FLING_V_MAX) — a corrupted
+     velocity sample must never be able to throw the book thousands
+     of pixels (Joshua's book-2 drag leapt ~6,676 px on bundle 12). */
+  scrollFling.v = Math.max(-FLING_V_MAX, Math.min(FLING_V_MAX, v0));
   var last = performance.now();
   (function step(now){
     scrollFling.raf = 0;
@@ -587,6 +618,48 @@ function startScrollFling(v0){
     }
     scrollFling.raf = requestAnimationFrame(step);
   })(last);
+}
+
+/* Bundle 13 — the walk's coordinates and velocity (the scroll-
+   fighting fix; full evidence in BUNDLE13-REPORT.md).
+   Bundle 12 measured finger travel from Touch.clientY read INSIDE
+   a section document. That coordinate's origin sits in a document
+   the walk itself moves: the section iframe's offset inside the
+   epub.js container changes with every scrollTop step the walk
+   applies, so a WebView that resolves touch coordinates against
+   the current layout feeds the walk its own output — deltas
+   cancel (his book 1: 110 counted moves, scrollTop never moved)
+   or oscillate and poison the release velocity (his book 2: one
+   drag leapt ~6,676 px). Touch.screenY is measured against the
+   physical screen: no scroll of any container can move it, so it
+   is the one vertical coordinate the walk can trust. Where a
+   device reports no screenY (some desktop emulation), clientY
+   remains as the fallback. */
+function touchY(t){
+  return (t && typeof t.screenY === 'number' && t.screenY) ? t.screenY : (t ? t.clientY : 0);
+}
+/* Counters the drag probe reports (bundle 13): how often the two
+   walk guards below had to eat a corrupted sample on this book. */
+window.__berWalkGuards = { stale: 0, clamped: 0 };
+/* Release velocity (scroll-space px/ms) from the drag's NET
+   displacement across its trailing window — never from the last
+   sample alone. Bundle 12 smoothed the per-move dy into the
+   velocity, so a single reversed or duplicated final sample
+   flipped the fling's direction and carried the reader back to
+   the drag's starting place (reproduced in the bundle-13
+   harness, scenario S2). Net displacement over >= 60 ms cannot
+   be flipped by one bad sample. */
+function walkReleaseVelocity(dw){
+  var s = dw.samples;
+  if (!s || s.length < 2) return 0;
+  var last = s[s.length - 1], base = s[0];
+  for (var i = s.length - 1; i >= 0; i--) {
+    if (last.t - s[i].t >= 60) { base = s[i]; break; }
+  }
+  var dt = last.t - base.t;
+  if (dt < 30) return 0;
+  var v = -(last.y - base.y) / dt;   // finger down => scroll toward the start
+  return Math.max(-FLING_V_MAX, Math.min(FLING_V_MAX, v));
 }
 
 function attachGestures(target, handlers){
@@ -613,19 +686,60 @@ function attachGestures(target, handlers){
      twice in quick succession still turns two pages — only a
      sub-250 ms same-path bounce is dropped). */
   var lastFireAt = 0, lastFireKind = '';
+  /* Bundle 13 — double-tap recognition (Joshua's ruling,
+     2026-11-01: double-tap toggles read-aloud; see the gesture
+     legend). On a surface that has an onDoubleTap handler, a tap
+     cannot fire its single-tap action at once: it is held for
+     DOUBLE_TAP_MS to learn whether a second tap lands. A second
+     accepted tap inside the window fires onDoubleTap INSTEAD —
+     the held single never runs, so a double-tap turns zero pages
+     and toggles nothing else. The held single fires with the
+     ORIGINAL tap's timestamp (handlers.onTap's second argument),
+     so a handler can still tell whether the world it sees (an
+     open definition card) was created before or by this tap.
+     The replay rules above still run first, so a tap's own
+     compatibility echoes (touch -> mouse -> click) can never be
+     mistaken for its second tap; and a same-path repeat under
+     60 ms of a held tap is a contact bounce, not a double-tap. */
+  var pendingTap = null;   // { el, kind, at, timer }
   function fireTap(el, kind){
     var now = Date.now();
     var gap = now - lastFireAt;
     if (lastFireKind && kind !== lastFireKind && gap < 700) return;
+    if (handlers.onDoubleTap) {
+      if (pendingTap) {
+        if (kind === pendingTap.kind && gap < 60) return;   // bounce
+        clearTimeout(pendingTap.timer);
+        pendingTap = null;
+        lastFireAt = now; lastFireKind = kind;
+        lastTapHandledAt = now;
+        handlers.onDoubleTap(el);
+        return;
+      }
+      if (kind === lastFireKind && gap < 250) return;
+      lastFireAt = now; lastFireKind = kind;
+      var pt = { el: el, kind: kind, at: now, timer: 0 };
+      pt.timer = setTimeout(function(){
+        if (pendingTap !== pt) return;
+        pendingTap = null;
+        lastTapHandledAt = Date.now();
+        if (handlers.onTap) handlers.onTap(pt.el, { at: pt.at });
+      }, DOUBLE_TAP_MS);
+      pendingTap = pt;
+      return;
+    }
     if (kind === lastFireKind && gap < 250) return;
     lastFireAt = now; lastFireKind = kind;
     lastTapHandledAt = now;
     if (handlers.onTap) handlers.onTap(el);
   }
   /* Single-finger drag state for the hand-walked scroll (see
-     the bundle-10 note at walkScrollBy): last finger Y, the
-     smoothed velocity (px/ms) for the release fling, and
-     whether this touch has actually walked yet. */
+     the bundle-10 note at walkScrollBy): the last accepted
+     finger Y in SCREEN space (bundle 13 — see touchY), the
+     recent DELIVERED positions (the stale-replay guard in the
+     touchmove handler reads them), the (time, Y) samples the
+     release velocity is computed from, and whether this touch
+     has actually walked yet. */
   var dragWalk = null;
   function armLong(st){
     st.longTimer = setTimeout(function(){
@@ -651,8 +765,9 @@ function attachGestures(target, handlers){
                 pct0: cur.fontPct, applied: false };
     } else if (ev.touches.length === 1 && !pinch) {
       var t = ev.touches[0];
-      dragWalk = { y: t.clientY, v: 0, lastT: Date.now(), walked: false };
-      press = { x: t.clientX, y: t.clientY, t0: Date.now(), targetEl: ev.target,
+      var ty = touchY(t);
+      dragWalk = { y: ty, seen: [ty], samples: [{ t: Date.now(), y: ty }], walked: false };
+      press = { x: t.clientX, y: ty, t0: Date.now(), targetEl: ev.target,
                 longFired: false, cancelled: false, longTimer: null };
       armLong(press);
     }
@@ -669,32 +784,68 @@ function attachGestures(target, handlers){
       }
     } else if (ev.touches.length === 1) {
       var t = ev.touches[0];
-      if (press && movedAway(press, t.clientX, t.clientY)) {
+      var y = touchY(t);
+      /* Bundle 13 stale-replay guard, judged on the RAW delivery
+         stream (every position this touch has reported, walked or
+         not): a delivery that repeats an EARLIER position exactly
+         — not the latest one, which is just a held finger — is a
+         replay arriving late (the measured corruption shape: each
+         new position followed by its predecessor). It is dropped
+         whole: no press-cancel test, no walk, no velocity sample.
+         A real finger reversing course lands on new fractional
+         coordinates, never the identical value it reported a few
+         events ago, so the guard costs a genuine drag nothing. */
+      var stale = false;
+      if (dragWalk) {
+        var seen = dragWalk.seen;
+        if (seen.length >= 2 && y !== seen[seen.length - 1] &&
+            seen.slice(0, seen.length - 1).indexOf(y) !== -1) stale = true;
+        if (stale) window.__berWalkGuards.stale++;
+        else { seen.push(y); if (seen.length > 8) seen.shift(); }
+      }
+      if (!stale && press && movedAway(press, t.clientX, y)) {
         press.cancelled = true; disarm(press);   // a drag is a swipe, not a tap/hold
       }
       /* Once the press is cancelled by travel this touch is a
          scroll drag: walk the book's container by the finger's
          own delta (bundle 10 — see walkScrollBy). The walk is
          preventDefaulted so a WebView that would ALSO scroll
-         natively cannot double the motion. */
-      if (dragWalk && (!press || press.cancelled)) {
-        var dy = dragWalk.y - t.clientY;
-        var now = Date.now();
-        var dt = Math.max(1, now - dragWalk.lastT);
-        dragWalk.y = t.clientY; dragWalk.lastT = now;
-        if (dy !== 0) {
-          dragWalk.v = dragWalk.v * 0.7 + (dy / dt) * 0.3;
-          if (walkScrollBy(dy)) {
-            dragWalk.walked = true;
-            if (ev.cancelable) ev.preventDefault();
+         natively cannot double the motion. Bundle 13: the delta
+         is measured in screen space (touchY — the scroll cannot
+         move it) between ACCEPTED positions, and one step is
+         capped at WALK_STEP_MAX. */
+      if (!stale && dragWalk) {
+        if (!press || press.cancelled) {
+          var dy = dragWalk.y - y;
+          if (dy !== 0) {
+            var step = dy;
+            if (step > WALK_STEP_MAX) { step = WALK_STEP_MAX; window.__berWalkGuards.clamped++; }
+            if (step < -WALK_STEP_MAX) { step = -WALK_STEP_MAX; window.__berWalkGuards.clamped++; }
+            if (walkScrollBy(step)) {
+              dragWalk.walked = true;
+              if (ev.cancelable) ev.preventDefault();
+            }
           }
         }
+        /* The accepted position and its velocity sample are
+           recorded whether or not this event walked (the press
+           may still be a tap candidate): deltas and the release
+           velocity both measure from accepted positions only. */
+        dragWalk.y = y;
+        var now = Date.now();
+        dragWalk.samples.push({ t: now, y: y });
+        while (dragWalk.samples.length > 2 &&
+               now - dragWalk.samples[0].t > 150) dragWalk.samples.shift();
       }
     }
   }, { passive: false });
   target.addEventListener('touchend', function(ev){
     var walked = dragWalk && dragWalk.walked ? dragWalk : null;
-    var walkV = walked ? dragWalk.v : 0;
+    /* Bundle 13: the fling's velocity comes from the drag's net
+       displacement (walkReleaseVelocity), never from the last
+       move sample — one reversed sample at release used to flip
+       the fling and throw the reader back to the drag's start. */
+    var walkV = walked ? walkReleaseVelocity(walked) : 0;
     dragWalk = null;
     if (walked) {
       /* This touch was a scroll, not a tap: stamp the guards so a
@@ -825,10 +976,28 @@ var lastFsToggleAt = 0;
    exactly once. */
 function pageGestureHandlers(){
   return {
-    onTap: function(el){
+    /* meta.at is the moment the tap was ACCEPTED (bundle 13's
+       double-tap gate fires a held single tap up to DOUBLE_TAP_MS
+       later). The footnote rule below needs the acceptance time:
+       a tap dismisses a definition card only when the card was
+       already open BEFORE that tap — the tap that opened the
+       card (its trailing click floats the note in the capture
+       phase, after the touch path accepted the tap) must not
+       turn around and dismiss its own card when the held single
+       fires. */
+    onTap: function(el, meta){
       if (!$('footnoteCard').classList.contains('hidden')) {
-        $('footnoteCard').classList.add('hidden');   // first tap just dismisses
-        lastFootnoteDismissAt = Date.now();   // the click trailing this tap must not open a note either
+        var shownAt = window.__footnoteShownAt || 0;
+        var tapAt = meta && meta.at ? meta.at : Date.now();
+        if (tapAt > shownAt) {
+          $('footnoteCard').classList.add('hidden');   // first tap just dismisses
+          lastFootnoteDismissAt = Date.now();   // the click trailing this tap must not open a note either
+          return;
+        }
+        /* the card on screen belongs to THIS tap (it is the
+           definition the tap asked for): leave it open and let
+           the rest of the tap's business proceed no further —
+           opening a definition never toggles full screen. */
         return;
       }
       var pic = pictureTargetOf(el);
@@ -841,7 +1010,25 @@ function pageGestureHandlers(){
       lastFsToggleAt = now;
       setFullscreen(!isFullscreen);
     },
-    onLongPress: function(){ toggleTTS(); }
+    /* Bundle 13 (Joshua's ruling, 2026-11-01): double-tap toggles
+       read-aloud; the press-and-hold binding is gone entirely.
+       If this double-tap's first tap floated a definition card
+       (a double-tap that starts on a marked term), the card
+       yields — it is dismissed and its dismissal stamped, so the
+       second tap's trailing click cannot float it straight
+       back. A double-tap that lands on a picture never reaches
+       here as a read-aloud toggle: the first tap's click already
+       opened the picture, the second tap lands on the picture
+       view (whose own double-tap zooms), and the picture.open
+       guard below covers any path that still arrives. */
+    onDoubleTap: function(el){
+      if (!$('footnoteCard').classList.contains('hidden')) {
+        $('footnoteCard').classList.add('hidden');
+        lastFootnoteDismissAt = Date.now();
+      }
+      if (picture.open) return;
+      toggleTTS();
+    }
   };
 }
 /* Make sure the CURRENT page document carries the gesture
@@ -1049,8 +1236,9 @@ function attachPictureTaps(doc){
    phone's own TTS engine — the shell bridge speaks through
    Android TextToSpeech, so whichever engine Joshua installed
    (SherpaTTS / Piper) does the reading. Web Speech is the
-   fallback where no bridge exists. A second long-press, the Stop
-   chip, or closing the book stops it.
+   fallback where no bridge exists. A second double-tap (bundle
+   13 — it was a second long-press before), the Stop chip, or
+   closing the book stops it.
 
    Bundle 3 (Joshua, 2026-10-28 12:33, confirmed 12:40): the page
    CHASES the voice, and the sentence being read is HIGHLIGHTED.
@@ -1461,7 +1649,7 @@ function startTTS(){
   speech.sentences = []; speech.si = 0; speech.hlCfi = null;
   speech.turning = false; speech.emptyTurns = 0;
   $('ttsStopBtn').classList.remove('hidden');
-  toast('Reading aloud — long-press again to stop');
+  toast('Reading aloud — double-tap again to stop');
   /* From the TOP of the current page — the current location's
      start is the page's first word — as it has been since v0.1.1.
      afterTurn does the rest: map this page, speak it, turn, read on. */
@@ -1638,13 +1826,19 @@ function waitForViewerSize(){
     })();
   });
 }
+/* Bundle 13: double-tap on an edge zone also toggles read-aloud
+   (and turns ZERO pages — the double-tap gate holds the first
+   tap's page step and discards it when the second tap lands);
+   the zones' press-and-hold binding to read-aloud is removed,
+   like the page's. A single tap still turns one page, one
+   double-tap window (300 ms) after the tap. */
 attachGestures($('tapLeft'), {
   onTap: function(){ turnPage(-1); },
-  onLongPress: function(){ toggleTTS(); }
+  onDoubleTap: function(){ toggleTTS(); }
 });
 attachGestures($('tapRight'), {
   onTap: function(){ turnPage(1); },
-  onLongPress: function(){ toggleTTS(); }
+  onDoubleTap: function(){ toggleTTS(); }
 });
 /* Click fallback for the tap zones (exotic input only): a real
    gesture turn stamps gestureTurnAt, so the click that trails it
@@ -2116,7 +2310,75 @@ function diagProbeFinish(p){
   reportError('Scroll diagnostics',
     'Drag probe (web bundle ' + WEB_BUNDLE + ' running) — ' + text +
     (d && d.text ? '\n' + d.text : ''));
+  diagSetWatchStart(p, text);   // bundle 13: watch the next second
   diagProbeDisarm();
+}
+/* ---- bundle 13: the post-drag set watch ----
+   The bundle-12 drag probe could only watch DURING a drag. The
+   scroll-fighting question bundle 13 answers needs the second
+   AFTER one: does anything programmatic write the container's
+   scrollTop once the finger has left — a saved-place restore, an
+   epub.js re-display, a resize re-anchor? A trap on the live
+   container's scrollTop setter counts every write inside a 1 s
+   window opened at the probe drag's touchend and tags it by the
+   code that made it (from the write's own call stack). The trap
+   is passive — it counts and calls through — and it is armed on
+   the current container whenever the probe arms, because epub.js
+   recycles containers as books open. The follow-up report always
+   sends, even when the count is zero: zero IS the proof. */
+function diagArmSetTrap(){
+  var c = scrollContainer();
+  if (!c || c.__berSetTrap) return;
+  var proto = window.Element && window.Element.prototype;
+  var desc = proto && Object.getOwnPropertyDescriptor(proto, 'scrollTop');
+  if (!desc || !desc.set || !desc.get) return;
+  try {
+    Object.defineProperty(c, 'scrollTop', {
+      configurable: true, enumerable: true,
+      get: function(){ return desc.get.call(this); },
+      set: function(v){
+        var before = desc.get.call(this);
+        desc.set.call(this, v);
+        try {
+          var w = window.__berSetWatch;
+          if (w && Date.now() <= w.until && Math.abs(v - before) > 0.01) {
+            var st = (new Error().stack || '');
+            var tag = 'other';
+            if (/walkScrollBy|startScrollFling/.test(st)) tag = 'gesture';
+            else if (/auditViewHeights/.test(st)) tag = 'audit';
+            else if (/onResized|display/.test(st)) tag = 'epub-display';
+            else if (/epub\.min\.js|scrollTo|scrollBy/.test(st)) tag = 'epub-scroll';
+            w.counts[tag] = (w.counts[tag] || 0) + 1;
+            if (tag === 'other' && !w.firstOther)
+              w.firstOther = st.split('\n').slice(1, 4).join(' <- ').slice(0, 180);
+          }
+        } catch (e) {}
+      }
+    });
+    c.__berSetTrap = true;
+  } catch (e) { /* a container that refuses the trap just goes unwatched */ }
+}
+function diagSetWatchStart(p, dragText){
+  diagArmSetTrap();
+  var until = (p.endAt || Date.now()) + 1000;
+  var w = { until: until,
+            counts: { gesture: 0, 'epub-display': 0, 'epub-scroll': 0, audit: 0, other: 0 },
+            firstOther: '' };
+  window.__berSetWatch = w;
+  var g = window.__berWalkGuards || { stale: 0, clamped: 0 };
+  setTimeout(function(){
+    if (window.__berSetWatch !== w) return;
+    window.__berSetWatch = null;
+    var total = 0, parts = [];
+    for (var k in w.counts) { total += w.counts[k]; if (w.counts[k]) parts.push(k + ' ' + w.counts[k]); }
+    reportError('Scroll diagnostics',
+      'Post-drag set watch (web bundle ' + WEB_BUNDLE + ' running) — drag: ' + dragText +
+      ' · programmatic scrollTop sets in the 1 s after the drag ended: ' + total +
+      (parts.length ? ' (' + parts.join(' · ') + ')' : '') +
+      ' · walk guards this book: stale replays dropped ' + g.stale +
+      ', oversized steps clamped ' + g.clamped +
+      (w.firstOther ? ' · first untagged stack: ' + w.firstOther : ''));
+  }, Math.max(60, until + 150 - Date.now()));
 }
 function diagProbeDisarm(){
   if (!dragProbe) return;
@@ -2142,6 +2404,7 @@ function diagProbeArmOn(target, surface, p){
   function onEnd(){
     if (p.ended) return;
     p.ended = true;
+    p.endAt = Date.now();   // bundle 13: the set watch's window starts here
     setTimeout(function(){ diagProbeFinish(p); }, 450);
   }
   target.addEventListener('touchstart', onStart, { passive: true });
@@ -2153,6 +2416,7 @@ function diagProbeArmOn(target, surface, p){
 }
 function armDragProbe(){
   diagProbeDisarm();
+  window.__berWalkGuards = { stale: 0, clamped: 0 };   // bundle 13: per-book walk guard counts
   var p = { counts: { page: 0, parent: 0, zone: 0 },
             startTop: null, ended: false, finished: false, detachers: [] };
   dragProbe = p;
@@ -2160,6 +2424,7 @@ function armDragProbe(){
   diagProbeArmOn($('tapLeft'), 'zone', p);
   diagProbeArmOn($('tapRight'), 'zone', p);
   diagArmDocs();
+  diagArmSetTrap();
 }
 /* Arm the probe onto the live section documents (they recycle
    as the book re-paginates, so this re-runs as sections
@@ -2172,6 +2437,7 @@ function diagArmDocs(){
     for (var i = 0; i < list.length; i++)
       if (list[i] && list[i].document)
         diagProbeArmOn(list[i].document, 'page', dragProbe);
+    diagArmSetTrap();   // bundle 13: the container may have recycled too
   } catch (e) {}
 }
 /* ---- page self-repair (bundle 12) ----
