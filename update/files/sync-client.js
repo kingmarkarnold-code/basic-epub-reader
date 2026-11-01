@@ -24,7 +24,7 @@
      store the pinch writes on the phone.
    - Right / Left arrows, Space, Page Down / Page Up: page turns.
    - Esc: leave full screen.  F11: toggle full screen.
-   - R: read-aloud start/stop (the mouse's long-press). Plus,
+   - R: read-aloud start/stop (the mouse's double-tap). Plus,
      under the desktop shell only (see the 1.2.0 section below):
      a speaker button in the reader chrome, a right-click
      "Read aloud" entry on the page, and double-click for
@@ -70,8 +70,8 @@
     if ((ev.key === 'r' || ev.key === 'R') &&
         !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       /* Read-aloud (desktop 1.2.0): the phone starts it with a
-         long-press, which a mouse cannot do — R is the desktop's
-         press. It calls the core's own toggle: start reads from
+         double-tap (bundle 13; it was a long-press before) — R is
+         the desktop's press. It calls the core's own toggle: start reads from
          the top of the current page with sentence highlighting
          and automatic page turns; pressing R again stops. */
       if (typeof toggleTTS === 'function') {
@@ -94,8 +94,8 @@
      injects it — so if this file is ever adopted by the phone as
      a channel bundle, everything in this section stays inert.
 
-     The phone starts read-aloud with a long-press; a mouse has
-     no long-press. Desktop gets three doors into the core's own
+     The phone starts read-aloud with a double-tap (bundle 13;
+     formerly a long-press). Desktop gets three doors into the core's own
      toggleTTS (same start at the top of the current page, same
      sentence highlighting and automatic page turns, same stop):
      a speaker button in the reader chrome, the R key, and a
